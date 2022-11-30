@@ -17,32 +17,35 @@ jobs:
 
     - name: Setup Requirements
       run: sudo apt install -y wget binutils
-      env:
-        USERNAME: ${{ github.actor }}
-        TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Get compiler
       run: wget https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q2-update/+download/gcc-arm-none-eabi-4_8-2014q2-20140609-linux.tar.bz2
 
     - name: Setup compiler
       run: sudo tar -xf gcc-arm-none-eabi-4_8-2014q2-20140609-linux.tar.bz2 -C ./
-      env:
-        CROSS_COMPILE: ./gcc-arm-none-eabi-4_8-2014q2/bin/arm-none-eabi-
 
     - name: Create output directory
       run: mkdir output
 
     - name: make hx4700_defconfig
       run: make hx4700_defconfig
+      env:
+        CROSS_COMPILE: ./gcc-arm-none-eabi-4_8-2014q2/bin/arm-none-eabi-
 
     - name: make zImage
       run: make zImage
+      env:
+        CROSS_COMPILE: ./gcc-arm-none-eabi-4_8-2014q2/bin/arm-none-eabi-
 
     - name: make -k
       run: make -k
+      env:
+        CROSS_COMPILE: ./gcc-arm-none-eabi-4_8-2014q2/bin/arm-none-eabi-
 
     - name: make modules_install
       run: make INSTALL_MOD_PATH=./modules -j2 modules_install
+      env:
+        CROSS_COMPILE: ./gcc-arm-none-eabi-4_8-2014q2/bin/arm-none-eabi-
 
     - name: Pack modules to tar
       run: sudo tar --create --ignore-failed-read --preserve-permissions --recursion --preserve-order --sparse --totals --wildcards --verbose --gzip --file=modules.tar.gz ./modules/
