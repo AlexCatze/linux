@@ -1,0 +1,62 @@
+name: Dev Build
+
+on:
+  push:
+    branches:
+      - v3.7-PocketPC
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Apt Update
+      run: sudo apt update
+
+    - name: Setup Requirements
+      run: sudo apt install -y wget binutils
+      env:
+        USERNAME: ${{ github.actor }}
+        TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    //get compiler and buildutils
+
+    - name: Get compiler
+      run: wget https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q2-update/+download/gcc-arm-none-eabi-4_8-2014q2-20140609-linux.tar.bz2
+
+    - name: Setup compiler
+      run: sudo tar -xf gcc-arm-none-eabi-4_8-2014q2-20140609-linux.tar.bz2 -C ./
+      env:
+        CROSS_COMPILE: ./gcc-arm-none-eabi-4_8-2014q2/bin/arm-none-eabi-
+
+    - name: Create output directory
+      run: mkdir output
+
+    - name: make hx4700_defconfig
+      run: make hx4700_defconfig
+
+    - name: make zImage
+      run: make zImage
+
+    - name: make -k
+      run: make -k
+
+    - name: make modules_install
+      run: make INSTALL_MOD_PATH=./modules -j2 modules_install
+
+    - name: Pack modules to tar
+      run: sudo tar --create --ignore-failed-read --preserve-permissions --recursion --preserve-order --sparse --totals --wildcards --verbose --gzip --file=modules.tar.gz ./modules/
+
+    - name: Move kernel and modules to output
+      run: mv ./arch/arm/boot/zImage ./output/hx4700-zImage; mv modules.tar.gz ./output/hx4700-modules.tar.gz;
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: dev-${{ github.sha }}
+        prerelease: true
+        name: Dev build ${{ github.sha }}
+        files: |
+          output/*
+
