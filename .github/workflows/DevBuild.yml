@@ -48,7 +48,7 @@ jobs:
         CROSS_COMPILE: ./gcc-arm-none-eabi-4_8-2014q2/bin/arm-none-eabi-
 
     - name: Pack modules to tar
-      run: sudo tar -C ./modules/ --create --ignore-failed-read --preserve-permissions --recursion --sparse --totals --wildcards --gzip --file=modules.tar.gz
+      run: sudo tar -C ./modules/ --create --ignore-failed-read --preserve-permissions --recursion --sparse --totals --wildcards --gzip --file=modules.tar.gz ./*
 
     - name: Move kernel and modules to output
       run: mv ./arch/arm/boot/zImage ./output/hx4700-zImage; mv modules.tar.gz ./output/hx4700-modules.tar.gz;
