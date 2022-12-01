@@ -993,6 +993,10 @@ CONFIG_WLAN=y
 # CONFIG_RT2X00 is not set
 # CONFIG_WL_TI is not set
 # CONFIG_MWIFIEX is not set
+CONFIG_ACX_MAC80211=m
+CONFIG_ACX_MAC80211_MEM=y
+CONFIG_HX4700_ACX=m
+# CONFIG_RX1950_ACX is not set
 
 #
 # Enable WiMAX (Networking options) to see the WiMAX drivers
