@@ -600,11 +600,11 @@ static struct platform_device gpio_vbus = {
 
 static const struct ads7846_platform_data tsc2046_info = {
 	.model            = 7846,
-	.vref_delay_usecs = 100,
+	.vref_delay_usecs = 50,
 	.pressure_max     = 1024,
-	.debounce_max     = 10,
-	.debounce_tol     = 3,
-	.debounce_rep     = 1,
+	.debounce_max     = 5,
+	.debounce_tol     = 5,
+	.debounce_rep     = 0,
 	.gpio_pendown     = GPIO58_HX4700_TSC2046_nPENIRQ,
 };
 
