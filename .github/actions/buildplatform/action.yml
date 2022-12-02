@@ -7,8 +7,8 @@ inputs:
 runs:
   using: "composite"
   steps:
-  - name: make ${{inputs.registry_username}}_defconfig
-    run: make ${{inputs.registry_username}}_defconfig
+  - name: make ${{inputs.codename}}_defconfig
+    run: make ${{inputs.codename}}_defconfig
     shell: bash
     env:
       CROSS_COMPILE: ./gcc-arm-none-eabi-4_8-2014q2/bin/arm-none-eabi-
@@ -36,7 +36,7 @@ runs:
     shell: bash
 
   - name: Move kernel and modules to output
-    run: mv ./arch/arm/boot/zImage ./output/${{inputs.registry_username}}-zImage; mv modules.tar.gz ./output/${{inputs.registry_username}}-modules.tar.gz;
+    run: mv ./arch/arm/boot/zImage ./output/${{inputs.codename}}-zImage; mv modules.tar.gz ./output/${{inputs.codename}}-modules.tar.gz;
     shell: bash
 
   - name: Clean
