@@ -3,6 +3,7 @@ Patched Linux kernel for PocketPCs and PDAs.
 Recommended GCC: https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q2-update
 
 Currently supported:
-    HP iPAQ hx4700 (hx4700_defconfig)
+    HP iPAQ hx4700 (hx4700)
+    QEMU versatilepb (qemu)
 
 Original README available at README.old
