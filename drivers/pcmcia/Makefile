@@ -66,6 +66,8 @@ pxa2xx-obj-$(CONFIG_MACH_PALMTC)		+= pxa2xx_palmtc.o
 pxa2xx-obj-$(CONFIG_MACH_PALMLD)		+= pxa2xx_palmld.o
 pxa2xx-obj-$(CONFIG_MACH_E740)			+= pxa2xx_e740.o
 pxa2xx-obj-$(CONFIG_MACH_STARGATE2)		+= pxa2xx_stargate2.o
+pxa2xx-obj-$(CONFIG_MACH_ASUSP525)		+= pxa2xx_asusp525.o
+pxa2xx-obj-$(CONFIG_MACH_LOOX720)		+= pxa2xx_loox720.o
 
 obj-$(CONFIG_PCMCIA_PXA2XX)			+= pxa2xx_base.o $(pxa2xx-obj-y)
 

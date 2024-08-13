@@ -154,3 +154,21 @@ config SND_PXA2XX_SOC_IMOTE2
        help
          Say Y if you want to add support for SoC audio on the
 	 IMote 2.
+
+config SND_PXA2XX_SOC_ASUSP5X5
+	tristate "SoC Audio support for Asus P525"
+	depends on SND_PXA2XX_SOC && (MACH_ASUSP525 || MACH_ASUSP535)
+	select SND_PXA2XX_SOC_AC97
+	select SND_SOC_WM9713
+
+config SND_PXA2XX_SOC_LOOX
+	tristate "SoC Audio support for Loox 7xx series"
+	depends on SND_PXA2XX_SOC && MACH_LOOX720
+	select SND_PXA2XX_SOC_I2S
+	select SND_SOC_WM8750
+	select I2C
+	select I2C_PXA
+	select I2C_ALGOBIT
+	help
+	  Say Y if you want to add support for SoC audio on the
+	  Loox 7xx machines.
