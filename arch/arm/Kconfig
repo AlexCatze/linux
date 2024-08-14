@@ -1615,6 +1615,7 @@ config AUTO_ZRELADDR
 	  0xf8000000. This assumes the zImage being placed in the first 128MB
 	  from start of memory.
 
+
 endmenu
 
 menu "CPU Power Management"

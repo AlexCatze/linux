@@ -888,7 +888,67 @@ void __init arm_mm_memblock_reserve(void)
 	 * Reserve the page tables.  These are already in use,
 	 * and can only be in node 0.
 	 */
+/*
+	reserve_bootmem_node(pgdat, __pa(swapper_pg_dir),
+			     PTRS_PER_PGD * sizeof(pgd_t), BOOTMEM_DEFAULT);
+
+
+	if (machine_is_integrator() || machine_is_cintegrator())
+		res_size = __pa(swapper_pg_dir) - PHYS_OFFSET;
+
+
+	if (machine_is_edb7211())
+		res_size = 0x00020000;
+	if (machine_is_p720t())
+		res_size = 0x00014000;
+
+	
+
+	if (machine_is_h1940() || machine_is_rx3715()
+		|| machine_is_rx1950()) {
+		reserve_bootmem_node(pgdat, 0x30003000, 0x1000,
+				BOOTMEM_DEFAULT);
+		reserve_bootmem_node(pgdat, 0x30081000, 0x1000,
+				BOOTMEM_DEFAULT);
+	}
+
+	if (machine_is_palmld() || machine_is_palmtx()) {
+		reserve_bootmem_node(pgdat, 0xa0000000, 0x1000,
+				BOOTMEM_EXCLUSIVE);
+		reserve_bootmem_node(pgdat, 0xa0200000, 0x1000,
+				BOOTMEM_EXCLUSIVE);
+	}
+
+	if (machine_is_treo680() || machine_is_centro()) {
+		reserve_bootmem_node(pgdat, 0xa0000000, 0x1000,
+				BOOTMEM_EXCLUSIVE);
+		reserve_bootmem_node(pgdat, 0xa2000000, 0x1000,
+				BOOTMEM_EXCLUSIVE);
+	}
+
+	if (machine_is_palmt5())
+		reserve_bootmem_node(pgdat, 0xa0200000, 0x1000,
+				BOOTMEM_EXCLUSIVE);
+
+    if (machine_is_asusp525()) {
+		reserve_bootmem_node(pgdat, 0xa0008000, 0x4000,
+				BOOTMEM_EXCLUSIVE);
+		reserve_bootmem_node(pgdat, 0xa0000000, 0x1000,
+		        BOOTMEM_EXCLUSIVE);
+	}
+
+	if (machine_is_u300()) {
+#ifdef CONFIG_MACH_U300_SINGLE_RAM
+#if ((CONFIG_MACH_U300_ACCESS_MEM_SIZE & 1) == 1) &&	\
+	CONFIG_MACH_U300_2MB_ALIGNMENT_FIX
+		res_size = 0x00100000;
+#endif
+#endif
+	}
+*/
+  
 	memblock_reserve(__pa(swapper_pg_dir), PTRS_PER_PGD * sizeof(pgd_t));
+
 
 #ifdef CONFIG_SA1111
 	/*
