@@ -883,12 +883,15 @@ static inline void prepare_page_table(void)
  * Reserve the special regions of memory
  */
 void __init arm_mm_memblock_reserve(void)
-{
-	/*
-	 * Reserve the page tables.  These are already in use,
-	 * and can only be in node 0.
-	 */
+{/*
+    if (machine_is_asusp525()) {
+		reserve_bootmem_node(pgdat, 0xa0008000, 0x4000,
+				BOOTMEM_EXCLUSIVE);
+		reserve_bootmem_node(pgdat, 0xa0000000, 0x1000,
+		        BOOTMEM_EXCLUSIVE);*/
+
 	memblock_reserve(__pa(swapper_pg_dir), PTRS_PER_PGD * sizeof(pgd_t));
+
 
 #ifdef CONFIG_SA1111
 	/*
