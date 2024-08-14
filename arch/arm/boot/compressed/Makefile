@@ -4,6 +4,7 @@
 # create a compressed vmlinuz image from the original vmlinux
 #
 
+
 OBJS		=
 
 # Ensure that mmcif loader code appears early in the image
@@ -97,6 +98,7 @@ endif
 
 ccflags-y := -fpic -fno-builtin
 asflags-y := -Wa,-march=all
+
 
 # Provide size of uncompressed kernel to the decompressor via a linker symbol.
 LDFLAGS_vmlinux = --defsym _image_size=$(shell stat -c "%s" $(obj)/../Image)

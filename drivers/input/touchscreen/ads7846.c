@@ -918,7 +918,14 @@ static int ads7846_suspend(struct device *dev)
 		ts->suspended = true;
 	}
 
+
+#ifdef	CONFIG_REGULATOR
+	if (ts->reg)
+		regulator_disable(ts->reg);
+#endif
+
 	mutex_unlock(&ts->lock);
+
 
 	return 0;
 }
@@ -927,7 +934,13 @@ static int ads7846_resume(struct device *dev)
 {
 	struct ads7846 *ts = dev_get_drvdata(dev);
 
+#ifdef	CONFIG_REGULATOR
+	if (ts->reg)
+		regulator_enable(ts->reg);
+#endif
+
 	mutex_lock(&ts->lock);
+
 
 	if (ts->suspended) {
 
@@ -1295,18 +1308,21 @@ static int __devinit ads7846_probe(struct spi_device *spi)
 
 	ads7846_setup_spi_msg(ts, pdata);
 
+#ifdef CONFIG_REGULATOR
 	ts->reg = regulator_get(&spi->dev, "vcc");
 	if (IS_ERR(ts->reg)) {
-		err = PTR_ERR(ts->reg);
-		dev_err(&spi->dev, "unable to get regulator: %d\n", err);
-		goto err_free_gpio;
-	}
-
+		ts->reg = NULL;
+    }
+	else {
 	err = regulator_enable(ts->reg);
 	if (err) {
 		dev_err(&spi->dev, "unable to enable regulator: %d\n", err);
 		goto err_put_regulator;
 	}
+	}
+#else
+		ts->reg = NULL;
+#endif
 
 	irq_flags = pdata->irq_flags ? : IRQF_TRIGGER_FALLING;
 	irq_flags |= IRQF_ONESHOT;
@@ -1362,9 +1378,13 @@ static int __devinit ads7846_probe(struct spi_device *spi)
  err_free_irq:
 	free_irq(spi->irq, ts);
  err_disable_regulator:
-	regulator_disable(ts->reg);
+#ifdef	CONFIG_REGULATOR
+	if (ts->reg)
+		regulator_disable(ts->reg);
  err_put_regulator:
-	regulator_put(ts->reg);
+	if (ts->reg)
+		regulator_put(ts->reg);
+#endif
  err_free_gpio:
 	if (!ts->get_pendown_state)
 		gpio_free(ts->gpio_pendown);
@@ -1393,8 +1413,12 @@ static int __devexit ads7846_remove(struct spi_device *spi)
 
 	ads784x_hwmon_unregister(spi, ts);
 
-	regulator_disable(ts->reg);
-	regulator_put(ts->reg);
+#ifdef	CONFIG_REGULATOR
+	if (ts->reg) {
+		regulator_disable(ts->reg);
+		regulator_put(ts->reg);
+	}
+#endif
 
 	if (!ts->get_pendown_state) {
 		/*

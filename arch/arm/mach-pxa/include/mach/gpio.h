@@ -24,6 +24,8 @@
 #ifndef __ASM_ARCH_PXA_GPIO_H
 #define __ASM_ARCH_PXA_GPIO_H
 
+#define ARCH_NR_GPIOS 512
+
 #include <mach/irqs.h>
 #include <mach/hardware.h>
 #include <asm-generic/gpio.h>
@@ -97,7 +99,6 @@
 #define GFER(x)		GPIO_REG(BANK_OFF((x) >> 5) + 0x3c)
 #define GEDR(x)		GPIO_REG(BANK_OFF((x) >> 5) + 0x48)
 #define GAFR(x)		GPIO_REG(0x54 + (((x) & 0x70) >> 2))
-
 
 #define NR_BUILTIN_GPIO		PXA_GPIO_IRQ_NUM
 
