@@ -502,7 +502,9 @@ int schedule_nes_timer(struct nes_cm_node *cm_node, struct sk_buff *skb,
 static void nes_retrans_expired(struct nes_cm_node *cm_node)
 {
 	struct iw_cm_id *cm_id = cm_node->cm_id;
-	switch (cm_node->state) {
+	enum nes_cm_node_state state = cm_node->state;
+	cm_node->state = NES_CM_STATE_CLOSED;
+	switch (state) {
 	case NES_CM_STATE_SYN_RCVD:
 	case NES_CM_STATE_CLOSING:
 		rem_ref_cm_node(cm_node->cm_core, cm_node);
@@ -511,7 +513,6 @@ static void nes_retrans_expired(struct nes_cm_node *cm_node)
 	case NES_CM_STATE_FIN_WAIT1:
 		if (cm_node->cm_id)
 			cm_id->rem_ref(cm_id);
-		cm_node->state = NES_CM_STATE_CLOSED;
 		send_reset(cm_node, NULL);
 		break;
 	default:
@@ -1103,20 +1104,24 @@ static inline int mini_cm_accelerated(struct nes_cm_core *cm_core,
 static int nes_addr_resolve_neigh(struct nes_vnic *nesvnic, u32 dst_ip, int arpindex)
 {
 	struct rtable *rt;
-	struct flowi fl;
 	struct neighbour *neigh;
 	int rc = arpindex;
+	struct net_device *netdev;
 	struct nes_adapter *nesadapter = nesvnic->nesdev->nesadapter;
 
-	memset(&fl, 0, sizeof fl);
-	fl.nl_u.ip4_u.daddr = htonl(dst_ip);
-	if (ip_route_output_key(&init_net, &rt, &fl)) {
+	rt = ip_route_output(&init_net, htonl(dst_ip), 0, 0, 0);
+	if (IS_ERR(rt)) {
 		printk(KERN_ERR "%s: ip_route_output_key failed for 0x%08X\n",
 				__func__, dst_ip);
 		return rc;
 	}
 
-	neigh = neigh_lookup(&arp_tbl, &rt->rt_gateway, nesvnic->netdev);
+	if (netif_is_bond_slave(nesvnic->netdev))
+		netdev = nesvnic->netdev->master;
+	else
+		netdev = nesvnic->netdev;
+
+	neigh = neigh_lookup(&arp_tbl, &rt->rt_gateway, netdev);
 	if (neigh) {
 		if (neigh->nud_state & NUD_VALID) {
 			nes_debug(NES_DBG_CM, "Neighbor MAC address for 0x%08X"
@@ -1146,7 +1151,7 @@ static int nes_addr_resolve_neigh(struct nes_vnic *nesvnic, u32 dst_ip, int arpi
 	}
 
 	if ((neigh == NULL) || (!(neigh->nud_state & NUD_VALID)))
-		neigh_event_send(rt->u.dst.neighbour, NULL);
+		neigh_event_send(rt->dst.neighbour, NULL);
 
 	ip_rt_put(rt);
 	return rc;
@@ -1392,7 +1397,7 @@ static void handle_fin_pkt(struct nes_cm_node *cm_node)
 		cleanup_retrans_entry(cm_node);
 		cm_node->state = NES_CM_STATE_CLOSING;
 		send_ack(cm_node, NULL);
-		/* Wait for ACK as this is simultanous close..
+		/* Wait for ACK as this is simultaneous close..
 		* After we receive ACK, do not send anything..
 		* Just rm the node.. Done.. */
 		break;
@@ -1423,7 +1428,6 @@ static void handle_rst_pkt(struct nes_cm_node *cm_node, struct sk_buff *skb,
 {
 
 	int	reset = 0;	/* whether to send reset in case of err.. */
-	int	passive_state;
 	atomic_inc(&cm_resets_recvd);
 	nes_debug(NES_DBG_CM, "Received Reset, cm_node = %p, state = %u."
 			" refcnt=%d\n", cm_node, cm_node->state,
@@ -1438,10 +1442,7 @@ static void handle_rst_pkt(struct nes_cm_node *cm_node, struct sk_buff *skb,
 		active_open_err(cm_node, skb, reset);
 		break;
 	case NES_CM_STATE_MPAREQ_RCVD:
-		passive_state = atomic_add_return(1, &cm_node->passive_state);
-		if (passive_state ==  NES_SEND_RESET_EVENT)
-			create_event(cm_node, NES_CM_EVENT_RESET);
-		cm_node->state = NES_CM_STATE_CLOSED;
+		atomic_inc(&cm_node->passive_state);
 		dev_kfree_skb_any(skb);
 		break;
 	case NES_CM_STATE_ESTABLISHED:
@@ -1456,6 +1457,7 @@ static void handle_rst_pkt(struct nes_cm_node *cm_node, struct sk_buff *skb,
 	case NES_CM_STATE_CLOSED:
 		drop_packet(skb);
 		break;
+	case NES_CM_STATE_FIN_WAIT2:
 	case NES_CM_STATE_FIN_WAIT1:
 	case NES_CM_STATE_LAST_ACK:
 		cm_node->cm_id->rem_ref(cm_node->cm_id);
@@ -1719,8 +1721,6 @@ static int handle_ack_pkt(struct nes_cm_node *cm_node, struct sk_buff *skb,
 {
 	int datasize = 0;
 	u32 inc_sequence;
-	u32 rem_seq_ack;
-	u32 rem_seq;
 	int ret = 0;
 	int optionsize;
 	optionsize = (tcph->doff << 2) - sizeof(struct tcphdr);
@@ -1730,8 +1730,6 @@ static int handle_ack_pkt(struct nes_cm_node *cm_node, struct sk_buff *skb,
 
 	skb_pull(skb, tcph->doff << 2);
 	inc_sequence = ntohl(tcph->seq);
-	rem_seq = ntohl(tcph->seq);
-	rem_seq_ack =  ntohl(tcph->ack_seq);
 	datasize = skb->len;
 	switch (cm_node->state) {
 	case NES_CM_STATE_SYN_RCVD:
@@ -2565,7 +2563,7 @@ static int nes_cm_disconn_true(struct nes_qp *nesqp)
 	u16 last_ae;
 	u8 original_hw_tcp_state;
 	u8 original_ibqp_state;
-	enum iw_cm_event_type disconn_status = IW_CM_EVENT_STATUS_OK;
+	enum iw_cm_event_status disconn_status = IW_CM_EVENT_STATUS_OK;
 	int issue_disconn = 0;
 	int issue_close = 0;
 	int issue_flush = 0;
@@ -2706,7 +2704,7 @@ static int nes_disconnect(struct nes_qp *nesqp, int abrupt)
 	nesibdev = nesvnic->nesibdev;
 
 	nes_debug(NES_DBG_CM, "netdev refcnt = %u.\n",
-			atomic_read(&nesvnic->netdev->refcnt));
+			netdev_refcnt_read(nesvnic->netdev));
 
 	if (nesqp->active_conn) {
 
@@ -2781,6 +2779,12 @@ int nes_accept(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 		return -EINVAL;
 	}
 
+	passive_state = atomic_add_return(1, &cm_node->passive_state);
+	if (passive_state == NES_SEND_RESET_EVENT) {
+		rem_ref_cm_node(cm_node->cm_core, cm_node);
+		return -ECONNRESET;
+	}
+
 	/* associate the node with the QP */
 	nesqp->cm_node = (void *)cm_node;
 	cm_node->nesqp = nesqp;
@@ -2790,7 +2794,7 @@ int nes_accept(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 	atomic_inc(&cm_accepts);
 
 	nes_debug(NES_DBG_CM, "netdev refcnt = %u.\n",
-			atomic_read(&nesvnic->netdev->refcnt));
+			netdev_refcnt_read(nesvnic->netdev));
 
 	/* allocate the ietf frame and space for private data */
 	nesqp->ietf_frame = pci_alloc_consistent(nesdev->pcidev,
@@ -2983,9 +2987,6 @@ int nes_accept(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 		printk(KERN_ERR "%s[%u] OFA CM event_handler returned, "
 			"ret=%d\n", __func__, __LINE__, ret);
 
-	passive_state = atomic_add_return(1, &cm_node->passive_state);
-	if (passive_state == NES_SEND_RESET_EVENT)
-		create_event(cm_node, NES_CM_EVENT_RESET);
 	return 0;
 }
 
@@ -3128,9 +3129,7 @@ int nes_create_listen(struct iw_cm_id *cm_id, int backlog)
 	struct nes_vnic *nesvnic;
 	struct nes_cm_listener *cm_node;
 	struct nes_cm_info cm_info;
-	struct nes_adapter *adapter;
 	int err;
-
 
 	nes_debug(NES_DBG_CM, "cm_id = %p, local port = 0x%04X.\n",
 			cm_id, ntohs(cm_id->local_addr.sin_port));
@@ -3138,7 +3137,7 @@ int nes_create_listen(struct iw_cm_id *cm_id, int backlog)
 	nesvnic = to_nesvnic(cm_id->device);
 	if (!nesvnic)
 		return -EINVAL;
-	adapter = nesvnic->nesdev->nesadapter;
+
 	nes_debug(NES_DBG_CM, "nesvnic=%p, netdev=%p, %s\n",
 			nesvnic, nesvnic->netdev, nesvnic->netdev->name);
 

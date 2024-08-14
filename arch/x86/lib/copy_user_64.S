@@ -29,7 +29,7 @@
 	.align 8
 	.quad  0b
 	.quad  2b
-	.byte  \feature			/* when feature is set */
+	.word  \feature			/* when feature is set */
 	.byte  5
 	.byte  5
 	.previous
@@ -117,7 +117,7 @@ ENDPROC(bad_from_user)
  * rdx count
  *
  * Output:
- * eax uncopied bytes or 0 if successfull.
+ * eax uncopied bytes or 0 if successful.
  */
 ENTRY(copy_user_generic_unrolled)
 	CFI_STARTPROC

@@ -1,8 +1,8 @@
 menuconfig OMAP2_DSS
-        tristate "OMAP2/3 Display Subsystem support (EXPERIMENTAL)"
-        depends on ARCH_OMAP2 || ARCH_OMAP3
+        tristate "OMAP2+ Display Subsystem support (EXPERIMENTAL)"
+        depends on ARCH_OMAP2PLUS
         help
-          OMAP2/3 Display Subsystem support.
+	  OMAP2+ Display Subsystem support.
 
 if OMAP2_DSS
 
@@ -36,6 +36,12 @@ config OMAP2_DSS_COLLECT_IRQ_STATS
 	  <debugfs>/omapdss/dispc_irq for DISPC interrupts, and
 	  <debugfs>/omapdss/dsi_irq for DSI interrupts.
 
+config OMAP2_DSS_DPI
+	bool "DPI support"
+	default y
+	help
+	  DPI Interface. This is the Parallel Display Interface.
+
 config OMAP2_DSS_RFBI
 	bool "RFBI support"
         default n
@@ -53,6 +59,14 @@ config OMAP2_DSS_VENC
         default y
 	help
 	  OMAP Video Encoder support for S-Video and composite TV-out.
+
+config OMAP4_DSS_HDMI
+	bool "HDMI support"
+	depends on ARCH_OMAP4
+        default y
+	help
+	  HDMI Interface. This adds the High Definition Multimedia Interface.
+	  See http://www.hdmi.org/ for HDMI specification.
 
 config OMAP2_DSS_SDI
 	bool "SDI support"

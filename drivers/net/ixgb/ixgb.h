@@ -78,9 +78,13 @@ struct ixgb_adapter;
 #define PFX "ixgb: "
 
 #ifdef _DEBUG_DRIVER_
-#define IXGB_DBG(args...) printk(KERN_DEBUG PFX args)
+#define IXGB_DBG(fmt, args...) printk(KERN_DEBUG PFX fmt, ##args)
 #else
-#define IXGB_DBG(args...)
+#define IXGB_DBG(fmt, args...)				\
+do {							\
+	if (0)						\
+		printk(KERN_DEBUG PFX fmt, ##args);	\
+} while (0)
 #endif
 
 /* TX/RX descriptor defines */
@@ -145,7 +149,7 @@ struct ixgb_desc_ring {
 
 struct ixgb_adapter {
 	struct timer_list watchdog_timer;
-	struct vlan_group *vlgrp;
+	unsigned long active_vlans[BITS_TO_LONGS(VLAN_N_VID)];
 	u32 bd_number;
 	u32 rx_buffer_len;
 	u32 part_num;

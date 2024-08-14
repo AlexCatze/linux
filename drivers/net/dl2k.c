@@ -465,7 +465,7 @@ rio_open (struct net_device *dev)
 	init_timer (&np->timer);
 	np->timer.expires = jiffies + 1*HZ;
 	np->timer.data = (unsigned long) dev;
-	np->timer.function = &rio_timer;
+	np->timer.function = rio_timer;
 	add_timer (&np->timer);
 
 	/* Start Tx/Rx */
@@ -596,8 +596,6 @@ alloc_list (struct net_device *dev)
 	/* Set RFDListPtr */
 	writel (np->rx_ring_dma, dev->base_addr + RFDListPtr0);
 	writel (0, dev->base_addr + RFDListPtr1);
-
-	return;
 }
 
 static netdev_tx_t
@@ -1132,14 +1130,14 @@ set_multicast (struct net_device *dev)
 		/* Receive broadcast and multicast frames */
 		rx_mode = ReceiveBroadcast | ReceiveMulticast | ReceiveUnicast;
 	} else if (!netdev_mc_empty(dev)) {
-		struct dev_mc_list *mclist;
+		struct netdev_hw_addr *ha;
 		/* Receive broadcast frames and multicast frames filtering
 		   by Hashtable */
 		rx_mode =
 		    ReceiveBroadcast | ReceiveMulticastHash | ReceiveUnicast;
-		netdev_for_each_mc_addr(mclist, dev) {
+		netdev_for_each_mc_addr(ha, dev) {
 			int bit, index = 0;
-			int crc = ether_crc_le (ETH_ALEN, mclist->dmi_addr);
+			int crc = ether_crc_le(ETH_ALEN, ha->addr);
 			/* The inverted high significant 6 bits of CRC are
 			   used as an index to hashtable */
 			for (bit = 0; bit < 6; bit++)
@@ -1755,8 +1753,6 @@ rio_close (struct net_device *dev)
 
 	/* Free all the skbuffs in the queue. */
 	for (i = 0; i < RX_RING_SIZE; i++) {
-		np->rx_ring[i].status = 0;
-		np->rx_ring[i].fraginfo = 0;
 		skb = np->rx_skbuff[i];
 		if (skb) {
 			pci_unmap_single(np->pdev,
@@ -1765,6 +1761,8 @@ rio_close (struct net_device *dev)
 			dev_kfree_skb (skb);
 			np->rx_skbuff[i] = NULL;
 		}
+		np->rx_ring[i].status = 0;
+		np->rx_ring[i].fraginfo = 0;
 	}
 	for (i = 0; i < TX_RING_SIZE; i++) {
 		skb = np->tx_skbuff[i];

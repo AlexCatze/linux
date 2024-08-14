@@ -106,7 +106,7 @@ MODULE_DESCRIPTION ("AMD8111 based 10/100 Ethernet Controller. Driver Version "M
 MODULE_LICENSE("GPL");
 MODULE_DEVICE_TABLE(pci, amd8111e_pci_tbl);
 module_param_array(speed_duplex, int, NULL, 0);
-MODULE_PARM_DESC(speed_duplex, "Set device speed and duplex modes, 0: Auto Negotitate, 1: 10Mbps Half Duplex, 2: 10Mbps Full Duplex, 3: 100Mbps Half Duplex, 4: 100Mbps Full Duplex");
+MODULE_PARM_DESC(speed_duplex, "Set device speed and duplex modes, 0: Auto Negotiate, 1: 10Mbps Half Duplex, 2: 10Mbps Full Duplex, 3: 100Mbps Half Duplex, 4: 100Mbps Full Duplex");
 module_param_array(coalesce, bool, NULL, 0);
 MODULE_PARM_DESC(coalesce, "Enable or Disable interrupt coalescing, 1: Enable, 0: Disable");
 module_param_array(dynamic_ipg, bool, NULL, 0);
@@ -396,7 +396,7 @@ static int amd8111e_set_coalesce(struct net_device * dev, enum coal_mode cmod)
 			event_count = coal_conf->rx_event_count;
 			if( timeout > MAX_TIMEOUT ||
 					event_count > MAX_EVENT_COUNT )
-			return -EINVAL;
+				return -EINVAL;
 
 			timeout = timeout * DELAY_TIMER_CONV;
 			writel(VAL0|STINTEN, mmio+INTEN0);
@@ -409,7 +409,7 @@ static int amd8111e_set_coalesce(struct net_device * dev, enum coal_mode cmod)
 			event_count = coal_conf->tx_event_count;
 			if( timeout > MAX_TIMEOUT ||
 					event_count > MAX_EVENT_COUNT )
-			return -EINVAL;
+				return -EINVAL;
 
 
 			timeout = timeout * DELAY_TIMER_CONV;
@@ -903,18 +903,18 @@ static int amd8111e_read_mib(void __iomem *mmio, u8 MIB_COUNTER)
 }
 
 /*
-This function reads the mib registers and returns the hardware statistics. It  updates previous internal driver statistics with new values.
-*/
-static struct net_device_stats *amd8111e_get_stats(struct net_device * dev)
+ * This function reads the mib registers and returns the hardware statistics.
+ * It updates previous internal driver statistics with new values.
+ */
+static struct net_device_stats *amd8111e_get_stats(struct net_device *dev)
 {
 	struct amd8111e_priv *lp = netdev_priv(dev);
 	void __iomem *mmio = lp->mmio;
 	unsigned long flags;
-	/* struct net_device_stats *prev_stats = &lp->prev_stats; */
-	struct net_device_stats* new_stats = &lp->stats;
+	struct net_device_stats *new_stats = &dev->stats;
 
-	if(!lp->opened)
-		return &lp->stats;
+	if (!lp->opened)
+		return new_stats;
 	spin_lock_irqsave (&lp->lock, flags);
 
 	/* stats.rx_packets */
@@ -1315,7 +1315,7 @@ static netdev_tx_t amd8111e_start_xmit(struct sk_buff *skb,
 	lp->tx_ring[tx_index].tx_flags = 0;
 
 #if AMD8111E_VLAN_TAG_USED
-	if((lp->vlgrp != NULL) && vlan_tx_tag_present(skb)){
+	if (vlan_tx_tag_present(skb)) {
 		lp->tx_ring[tx_index].tag_ctrl_cmd |=
 				cpu_to_le16(TCC_VLAN_INSERT);
 		lp->tx_ring[tx_index].tag_ctrl_info =
@@ -1338,8 +1338,6 @@ static netdev_tx_t amd8111e_start_xmit(struct sk_buff *skb,
 	/* Trigger an immediate send poll. */
 	writel( VAL1 | TDMD0, lp->mmio + CMD0);
 	writel( VAL2 | RDMD0,lp->mmio + CMD0);
-
-	dev->trans_start = jiffies;
 
 	if(amd8111e_tx_queue_avail(lp) < 0){
 		netif_stop_queue(dev);
@@ -1376,7 +1374,7 @@ list to the device.
 */
 static void amd8111e_set_multicast_list(struct net_device *dev)
 {
-	struct dev_mc_list *mc_ptr;
+	struct netdev_hw_addr *ha;
 	struct amd8111e_priv *lp = netdev_priv(dev);
 	u32 mc_filter[2] ;
 	int bit_num;
@@ -1400,15 +1398,15 @@ static void amd8111e_set_multicast_list(struct net_device *dev)
 		mc_filter[1] = mc_filter[0] = 0;
 		lp->options &= ~OPTION_MULTICAST_ENABLE;
 		amd8111e_writeq(*(u64*)mc_filter,lp->mmio + LADRF);
-		/* disable promiscous mode */
+		/* disable promiscuous mode */
 		writel(PROM, lp->mmio + CMD2);
 		return;
 	}
 	/* load all the multicast addresses in the logic filter */
 	lp->options |= OPTION_MULTICAST_ENABLE;
 	mc_filter[1] = mc_filter[0] = 0;
-	netdev_for_each_mc_addr(mc_ptr, dev) {
-		bit_num = (ether_crc_le(ETH_ALEN, mc_ptr->dmi_addr) >> 26) & 0x3f;
+	netdev_for_each_mc_addr(ha, dev) {
+		bit_num = (ether_crc_le(ETH_ALEN, ha->addr) >> 26) & 0x3f;
 		mc_filter[bit_num >> 5] |= 1 << (bit_num & 31);
 	}
 	amd8111e_writeq(*(u64*)mc_filter,lp->mmio+ LADRF);

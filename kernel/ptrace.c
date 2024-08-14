@@ -14,7 +14,6 @@
 #include <linux/mm.h>
 #include <linux/highmem.h>
 #include <linux/pagemap.h>
-#include <linux/smp_lock.h>
 #include <linux/ptrace.h>
 #include <linux/security.h>
 #include <linux/signal.h>
@@ -23,6 +22,7 @@
 #include <linux/syscalls.h>
 #include <linux/uaccess.h>
 #include <linux/regset.h>
+#include <linux/hw_breakpoint.h>
 
 
 /*
@@ -76,7 +76,6 @@ void __ptrace_unlink(struct task_struct *child)
 	child->parent = child->real_parent;
 	list_del_init(&child->ptrace_entry);
 
-	arch_ptrace_untrace(child);
 	if (task_is_traced(child))
 		ptrace_untrace(child);
 }
@@ -136,21 +135,24 @@ int __ptrace_may_access(struct task_struct *task, unsigned int mode)
 		return 0;
 	rcu_read_lock();
 	tcred = __task_cred(task);
-	if ((cred->uid != tcred->euid ||
-	     cred->uid != tcred->suid ||
-	     cred->uid != tcred->uid  ||
-	     cred->gid != tcred->egid ||
-	     cred->gid != tcred->sgid ||
-	     cred->gid != tcred->gid) &&
-	    !capable(CAP_SYS_PTRACE)) {
-		rcu_read_unlock();
-		return -EPERM;
-	}
+	if (cred->user->user_ns == tcred->user->user_ns &&
+	    (cred->uid == tcred->euid &&
+	     cred->uid == tcred->suid &&
+	     cred->uid == tcred->uid  &&
+	     cred->gid == tcred->egid &&
+	     cred->gid == tcred->sgid &&
+	     cred->gid == tcred->gid))
+		goto ok;
+	if (ns_capable(tcred->user->user_ns, CAP_SYS_PTRACE))
+		goto ok;
+	rcu_read_unlock();
+	return -EPERM;
+ok:
 	rcu_read_unlock();
 	smp_rmb();
 	if (task->mm)
 		dumpable = get_dumpable(task->mm);
-	if (!dumpable && !capable(CAP_SYS_PTRACE))
+	if (!dumpable && !task_ns_capable(task, CAP_SYS_PTRACE))
 		return -EPERM;
 
 	return security_ptrace_access_check(task, mode);
@@ -165,7 +167,7 @@ bool ptrace_may_access(struct task_struct *task, unsigned int mode)
 	return !err;
 }
 
-int ptrace_attach(struct task_struct *task)
+static int ptrace_attach(struct task_struct *task)
 {
 	int retval;
 
@@ -183,7 +185,7 @@ int ptrace_attach(struct task_struct *task)
 	 * under ptrace.
 	 */
 	retval = -ERESTARTNOINTR;
-	if (mutex_lock_interruptible(&task->cred_guard_mutex))
+	if (mutex_lock_interruptible(&task->signal->cred_guard_mutex))
 		goto out;
 
 	task_lock(task);
@@ -200,7 +202,7 @@ int ptrace_attach(struct task_struct *task)
 		goto unlock_tasklist;
 
 	task->ptrace = PT_PTRACED;
-	if (capable(CAP_SYS_PTRACE))
+	if (task_ns_capable(task, CAP_SYS_PTRACE))
 		task->ptrace |= PT_PTRACE_CAP;
 
 	__ptrace_link(task, current);
@@ -210,7 +212,7 @@ int ptrace_attach(struct task_struct *task)
 unlock_tasklist:
 	write_unlock_irq(&tasklist_lock);
 unlock_creds:
-	mutex_unlock(&task->cred_guard_mutex);
+	mutex_unlock(&task->signal->cred_guard_mutex);
 out:
 	return retval;
 }
@@ -221,7 +223,7 @@ out:
  * Performs checks and sets PT_PTRACED.
  * Should be used by all ptrace implementations for PTRACE_TRACEME.
  */
-int ptrace_traceme(void)
+static int ptrace_traceme(void)
 {
 	int ret = -EPERM;
 
@@ -295,7 +297,7 @@ static bool __ptrace_detach(struct task_struct *tracer, struct task_struct *p)
 	return false;
 }
 
-int ptrace_detach(struct task_struct *child, unsigned int data)
+static int ptrace_detach(struct task_struct *child, unsigned int data)
 {
 	bool dead = false;
 
@@ -315,7 +317,7 @@ int ptrace_detach(struct task_struct *child, unsigned int data)
 		child->exit_code = data;
 		dead = __ptrace_detach(current, child);
 		if (!child->exit_state)
-			wake_up_process(child);
+			wake_up_state(child, TASK_TRACED | TASK_STOPPED);
 	}
 	write_unlock_irq(&tasklist_lock);
 
@@ -326,26 +328,34 @@ int ptrace_detach(struct task_struct *child, unsigned int data)
 }
 
 /*
- * Detach all tasks we were using ptrace on.
+ * Detach all tasks we were using ptrace on. Called with tasklist held
+ * for writing, and returns with it held too. But note it can release
+ * and reacquire the lock.
  */
 void exit_ptrace(struct task_struct *tracer)
+	__releases(&tasklist_lock)
+	__acquires(&tasklist_lock)
 {
 	struct task_struct *p, *n;
 	LIST_HEAD(ptrace_dead);
 
-	write_lock_irq(&tasklist_lock);
+	if (likely(list_empty(&tracer->ptraced)))
+		return;
+
 	list_for_each_entry_safe(p, n, &tracer->ptraced, ptrace_entry) {
 		if (__ptrace_detach(tracer, p))
 			list_add(&p->ptrace_entry, &ptrace_dead);
 	}
-	write_unlock_irq(&tasklist_lock);
 
+	write_unlock_irq(&tasklist_lock);
 	BUG_ON(!list_empty(&tracer->ptraced));
 
 	list_for_each_entry_safe(p, n, &ptrace_dead, ptrace_entry) {
 		list_del_init(&p->ptrace_entry);
 		release_task(p);
 	}
+
+	write_lock_irq(&tasklist_lock);
 }
 
 int ptrace_readdata(struct task_struct *tsk, unsigned long src, char __user *dst, int len)
@@ -398,7 +408,7 @@ int ptrace_writedata(struct task_struct *tsk, char __user *src, unsigned long ds
 	return copied;
 }
 
-static int ptrace_setoptions(struct task_struct *child, long data)
+static int ptrace_setoptions(struct task_struct *child, unsigned long data)
 {
 	child->ptrace &= ~PT_TRACE_MASK;
 
@@ -477,7 +487,8 @@ static int ptrace_setsiginfo(struct task_struct *child, const siginfo_t *info)
 #define is_sysemu_singlestep(request)	0
 #endif
 
-static int ptrace_resume(struct task_struct *child, long request, long data)
+static int ptrace_resume(struct task_struct *child, long request,
+			 unsigned long data)
 {
 	if (!valid_signal(data))
 		return -EIO;
@@ -554,10 +565,12 @@ static int ptrace_regset(struct task_struct *task, int req, unsigned int type,
 #endif
 
 int ptrace_request(struct task_struct *child, long request,
-		   long addr, long data)
+		   unsigned long addr, unsigned long data)
 {
 	int ret = -EIO;
 	siginfo_t siginfo;
+	void __user *datavp = (void __user *) data;
+	unsigned long __user *datalp = datavp;
 
 	switch (request) {
 	case PTRACE_PEEKTEXT:
@@ -574,19 +587,17 @@ int ptrace_request(struct task_struct *child, long request,
 		ret = ptrace_setoptions(child, data);
 		break;
 	case PTRACE_GETEVENTMSG:
-		ret = put_user(child->ptrace_message, (unsigned long __user *) data);
+		ret = put_user(child->ptrace_message, datalp);
 		break;
 
 	case PTRACE_GETSIGINFO:
 		ret = ptrace_getsiginfo(child, &siginfo);
 		if (!ret)
-			ret = copy_siginfo_to_user((siginfo_t __user *) data,
-						   &siginfo);
+			ret = copy_siginfo_to_user(datavp, &siginfo);
 		break;
 
 	case PTRACE_SETSIGINFO:
-		if (copy_from_user(&siginfo, (siginfo_t __user *) data,
-				   sizeof siginfo))
+		if (copy_from_user(&siginfo, datavp, sizeof siginfo))
 			ret = -EFAULT;
 		else
 			ret = ptrace_setsiginfo(child, &siginfo);
@@ -595,6 +606,32 @@ int ptrace_request(struct task_struct *child, long request,
 	case PTRACE_DETACH:	 /* detach a process that was attached. */
 		ret = ptrace_detach(child, data);
 		break;
+
+#ifdef CONFIG_BINFMT_ELF_FDPIC
+	case PTRACE_GETFDPIC: {
+		struct mm_struct *mm = get_task_mm(child);
+		unsigned long tmp = 0;
+
+		ret = -ESRCH;
+		if (!mm)
+			break;
+
+		switch (addr) {
+		case PTRACE_GETFDPIC_EXEC:
+			tmp = mm->context.exec_fdpic_loadmap;
+			break;
+		case PTRACE_GETFDPIC_INTERP:
+			tmp = mm->context.interp_fdpic_loadmap;
+			break;
+		default:
+			break;
+		}
+		mmput(mm);
+
+		ret = put_user(tmp, datalp);
+		break;
+	}
+#endif
 
 #ifdef PTRACE_SINGLESTEP
 	case PTRACE_SINGLESTEP:
@@ -620,7 +657,7 @@ int ptrace_request(struct task_struct *child, long request,
 	case PTRACE_SETREGSET:
 	{
 		struct iovec kiov;
-		struct iovec __user *uiov = (struct iovec __user *) data;
+		struct iovec __user *uiov = datavp;
 
 		if (!access_ok(VERIFY_WRITE, uiov, sizeof(*uiov)))
 			return -EFAULT;
@@ -661,15 +698,12 @@ static struct task_struct *ptrace_get_task_struct(pid_t pid)
 #define arch_ptrace_attach(child)	do { } while (0)
 #endif
 
-SYSCALL_DEFINE4(ptrace, long, request, long, pid, long, addr, long, data)
+SYSCALL_DEFINE4(ptrace, long, request, long, pid, unsigned long, addr,
+		unsigned long, data)
 {
 	struct task_struct *child;
 	long ret;
 
-	/*
-	 * This lock_kernel fixes a subtle race with suid exec
-	 */
-	lock_kernel();
 	if (request == PTRACE_TRACEME) {
 		ret = ptrace_traceme();
 		if (!ret)
@@ -703,11 +737,11 @@ SYSCALL_DEFINE4(ptrace, long, request, long, pid, long, addr, long, data)
  out_put_task_struct:
 	put_task_struct(child);
  out:
-	unlock_kernel();
 	return ret;
 }
 
-int generic_ptrace_peekdata(struct task_struct *tsk, long addr, long data)
+int generic_ptrace_peekdata(struct task_struct *tsk, unsigned long addr,
+			    unsigned long data)
 {
 	unsigned long tmp;
 	int copied;
@@ -718,7 +752,8 @@ int generic_ptrace_peekdata(struct task_struct *tsk, long addr, long data)
 	return put_user(tmp, (unsigned long __user *)data);
 }
 
-int generic_ptrace_pokedata(struct task_struct *tsk, long addr, long data)
+int generic_ptrace_pokedata(struct task_struct *tsk, unsigned long addr,
+			    unsigned long data)
 {
 	int copied;
 
@@ -813,10 +848,6 @@ asmlinkage long compat_sys_ptrace(compat_long_t request, compat_long_t pid,
 	struct task_struct *child;
 	long ret;
 
-	/*
-	 * This lock_kernel fixes a subtle race with suid exec
-	 */
-	lock_kernel();
 	if (request == PTRACE_TRACEME) {
 		ret = ptrace_traceme();
 		goto out;
@@ -846,7 +877,22 @@ asmlinkage long compat_sys_ptrace(compat_long_t request, compat_long_t pid,
  out_put_task_struct:
 	put_task_struct(child);
  out:
-	unlock_kernel();
 	return ret;
 }
 #endif	/* CONFIG_COMPAT */
+
+#ifdef CONFIG_HAVE_HW_BREAKPOINT
+int ptrace_get_breakpoints(struct task_struct *tsk)
+{
+	if (atomic_inc_not_zero(&tsk->ptrace_bp_refcnt))
+		return 0;
+
+	return -1;
+}
+
+void ptrace_put_breakpoints(struct task_struct *tsk)
+{
+	if (atomic_dec_and_test(&tsk->ptrace_bp_refcnt))
+		flush_ptrace_hw_breakpoint(tsk);
+}
+#endif /* CONFIG_HAVE_HW_BREAKPOINT */

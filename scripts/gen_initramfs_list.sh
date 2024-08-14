@@ -202,6 +202,7 @@ input_file() {
 			print_mtime "$1" >> ${output}
 			cat "$1"         >> ${output}
 		else
+		        echo "$1 \\"
 			cat "$1" | while read type dir file perm ; do
 				if [ "$type" == "file" ]; then
 					echo "$file \\";
@@ -231,7 +232,7 @@ arg="$1"
 case "$arg" in
 	"-l")	# files included in initramfs - used by kbuild
 		dep_list="list_"
-		echo "deps_initramfs := \\"
+		echo "deps_initramfs := $0 \\"
 		shift
 		;;
 	"-o")	# generate compressed cpio image named $1
@@ -242,6 +243,9 @@ case "$arg" in
 		echo "$output_file" | grep -q "\.gz$" && compr="gzip -9 -f"
 		echo "$output_file" | grep -q "\.bz2$" && compr="bzip2 -9 -f"
 		echo "$output_file" | grep -q "\.lzma$" && compr="lzma -9 -f"
+		echo "$output_file" | grep -q "\.xz$" && \
+				compr="xz --check=crc32 --lzma2=dict=1MiB"
+		echo "$output_file" | grep -q "\.lzo$" && compr="lzop -9 -f"
 		echo "$output_file" | grep -q "\.cpio$" && compr="cat"
 		shift
 		;;
@@ -280,7 +284,7 @@ while [ $# -gt 0 ]; do
 done
 
 # If output_file is set we will generate cpio archive and compress it
-# we are carefull to delete tmp files
+# we are careful to delete tmp files
 if [ ! -z ${output_file} ]; then
 	if [ -z ${cpio_file} ]; then
 		cpio_tfile="$(mktemp ${TMPDIR:-/tmp}/cpiofile.XXXXXX)"

@@ -38,7 +38,7 @@ long ext4_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		unsigned int oldflags;
 		unsigned int jflag;
 
-		if (!is_owner_or_cap(inode))
+		if (!inode_owner_or_capable(inode))
 			return -EACCES;
 
 		if (get_user(flags, (int __user *) arg))
@@ -146,7 +146,7 @@ flags_out:
 		__u32 generation;
 		int err;
 
-		if (!is_owner_or_cap(inode))
+		if (!inode_owner_or_capable(inode))
 			return -EPERM;
 
 		err = mnt_want_write(filp->f_path.mnt);
@@ -258,7 +258,7 @@ setversion_out:
 		if (me.moved_len > 0)
 			file_remove_suid(donor_filp);
 
-		if (copy_to_user((struct move_extent __user *)arg, 
+		if (copy_to_user((struct move_extent __user *)arg,
 				 &me, sizeof(me)))
 			err = -EFAULT;
 mext_out:
@@ -298,7 +298,7 @@ mext_out:
 	case EXT4_IOC_MIGRATE:
 	{
 		int err;
-		if (!is_owner_or_cap(inode))
+		if (!inode_owner_or_capable(inode))
 			return -EACCES;
 
 		err = mnt_want_write(filp->f_path.mnt);
@@ -320,7 +320,7 @@ mext_out:
 	case EXT4_IOC_ALLOC_DA_BLKS:
 	{
 		int err;
-		if (!is_owner_or_cap(inode))
+		if (!inode_owner_or_capable(inode))
 			return -EACCES;
 
 		err = mnt_want_write(filp->f_path.mnt);
@@ -329,6 +329,36 @@ mext_out:
 		err = ext4_alloc_da_blocks(inode);
 		mnt_drop_write(filp->f_path.mnt);
 		return err;
+	}
+
+	case FITRIM:
+	{
+		struct super_block *sb = inode->i_sb;
+		struct request_queue *q = bdev_get_queue(sb->s_bdev);
+		struct fstrim_range range;
+		int ret = 0;
+
+		if (!capable(CAP_SYS_ADMIN))
+			return -EPERM;
+
+		if (!blk_queue_discard(q))
+			return -EOPNOTSUPP;
+
+		if (copy_from_user(&range, (struct fstrim_range *)arg,
+		    sizeof(range)))
+			return -EFAULT;
+
+		range.minlen = max((unsigned int)range.minlen,
+				   q->limits.discard_granularity);
+		ret = ext4_trim_fs(sb, &range);
+		if (ret < 0)
+			return ret;
+
+		if (copy_to_user((struct fstrim_range *)arg, &range,
+		    sizeof(range)))
+			return -EFAULT;
+
+		return 0;
 	}
 
 	default:
@@ -373,7 +403,31 @@ long ext4_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case EXT4_IOC32_SETRSVSZ:
 		cmd = EXT4_IOC_SETRSVSZ;
 		break;
-	case EXT4_IOC_GROUP_ADD:
+	case EXT4_IOC32_GROUP_ADD: {
+		struct compat_ext4_new_group_input __user *uinput;
+		struct ext4_new_group_input input;
+		mm_segment_t old_fs;
+		int err;
+
+		uinput = compat_ptr(arg);
+		err = get_user(input.group, &uinput->group);
+		err |= get_user(input.block_bitmap, &uinput->block_bitmap);
+		err |= get_user(input.inode_bitmap, &uinput->inode_bitmap);
+		err |= get_user(input.inode_table, &uinput->inode_table);
+		err |= get_user(input.blocks_count, &uinput->blocks_count);
+		err |= get_user(input.reserved_blocks,
+				&uinput->reserved_blocks);
+		if (err)
+			return -EFAULT;
+		old_fs = get_fs();
+		set_fs(KERNEL_DS);
+		err = ext4_ioctl(file, EXT4_IOC_GROUP_ADD,
+				 (unsigned long) &input);
+		set_fs(old_fs);
+		return err;
+	}
+	case EXT4_IOC_MOVE_EXT:
+	case FITRIM:
 		break;
 	default:
 		return -ENOIOCTLCMD;

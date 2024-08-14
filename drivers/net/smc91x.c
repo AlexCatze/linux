@@ -72,6 +72,7 @@ static const char version[] =
 #include <linux/sched.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
+#include <linux/irq.h>
 #include <linux/errno.h>
 #include <linux/ioport.h>
 #include <linux/crc32.h>
@@ -80,6 +81,7 @@ static const char version[] =
 #include <linux/ethtool.h>
 #include <linux/mii.h>
 #include <linux/workqueue.h>
+#include <linux/of.h>
 
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -1285,7 +1287,7 @@ static irqreturn_t smc_interrupt(int irq, void *dev_id)
 			smc_phy_interrupt(dev);
 		} else if (status & IM_ERCV_INT) {
 			SMC_ACK_INT(lp, IM_ERCV_INT);
-			PRINTK("%s: UNSUPPORTED: ERCV INTERRUPT \n", dev->name);
+			PRINTK("%s: UNSUPPORTED: ERCV INTERRUPT\n", dev->name);
 		}
 	} while (--timeout);
 
@@ -1360,7 +1362,7 @@ static void smc_timeout(struct net_device *dev)
 		schedule_work(&lp->phy_configure);
 
 	/* We can accept TX packets again */
-	dev->trans_start = jiffies;
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	netif_wake_queue(dev);
 }
 
@@ -1412,7 +1414,7 @@ static void smc_set_multicast_list(struct net_device *dev)
 	 * within that register.
 	 */
 	else if (!netdev_mc_empty(dev)) {
-		struct dev_mc_list *cur_addr;
+		struct netdev_hw_addr *ha;
 
 		/* table for flipping the order of 3 bits */
 		static const unsigned char invert3[] = {0, 4, 2, 6, 1, 5, 3, 7};
@@ -1420,16 +1422,16 @@ static void smc_set_multicast_list(struct net_device *dev)
 		/* start with a table of all zeros: reject all */
 		memset(multicast_table, 0, sizeof(multicast_table));
 
-		netdev_for_each_mc_addr(cur_addr, dev) {
+		netdev_for_each_mc_addr(ha, dev) {
 			int position;
 
 			/* make sure this is a multicast address -
 		   	   shouldn't this be a given if we have it here ? */
-			if (!(*cur_addr->dmi_addr & 1))
+			if (!(*ha->addr & 1))
 				continue;
 
 			/* only use the low order bits */
-			position = crc32_le(~0, cur_addr->dmi_addr, 6) & 0x3f;
+			position = crc32_le(~0, ha->addr, 6) & 0x3f;
 
 			/* do some messy swapping to put the bit in the right spot */
 			multicast_table[invert3[position&7]] |=
@@ -2393,6 +2395,15 @@ static int smc_drv_resume(struct device *dev)
 	return 0;
 }
 
+#ifdef CONFIG_OF
+static const struct of_device_id smc91x_match[] = {
+	{ .compatible = "smsc,lan91c94", },
+	{ .compatible = "smsc,lan91c111", },
+	{},
+}
+MODULE_DEVICE_TABLE(of, smc91x_match);
+#endif
+
 static struct dev_pm_ops smc_drv_pm_ops = {
 	.suspend	= smc_drv_suspend,
 	.resume		= smc_drv_resume,
@@ -2405,6 +2416,9 @@ static struct platform_driver smc_driver = {
 		.name	= CARDNAME,
 		.owner	= THIS_MODULE,
 		.pm	= &smc_drv_pm_ops,
+#ifdef CONFIG_OF
+		.of_match_table = smc91x_match,
+#endif
 	},
 };
 

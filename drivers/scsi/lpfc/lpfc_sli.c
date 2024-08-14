@@ -1,7 +1,7 @@
 /*******************************************************************
  * This file is part of the Emulex Linux Device Driver for         *
  * Fibre Channel Host Bus Adapters.                                *
- * Copyright (C) 2004-2009 Emulex.  All rights reserved.           *
+ * Copyright (C) 2004-2011 Emulex.  All rights reserved.           *
  * EMULEX and SLI are trademarks of Emulex.                        *
  * www.emulex.com                                                  *
  * Portions Copyright (C) 2004-2005 Christoph Hellwig              *
@@ -95,8 +95,9 @@ lpfc_sli4_wq_put(struct lpfc_queue *q, union lpfc_wqe *wqe)
 		return -ENOMEM;
 	/* set consumption flag every once in a while */
 	if (!((q->host_index + 1) % LPFC_RELEASE_NOTIFICATION_INTERVAL))
-		bf_set(lpfc_wqe_gen_wqec, &wqe->generic, 1);
-
+		bf_set(wqe_wqec, &wqe->generic.wqe_com, 1);
+	if (q->phba->sli3_options & LPFC_SLI4_PHWQ_ENABLED)
+		bf_set(wqe_wqid, &wqe->generic.wqe_com, q->queue_id);
 	lpfc_sli_pcimem_bcopy(wqe, temp_wqe, q->entry_size);
 
 	/* Update the host index before invoking device */
@@ -212,7 +213,7 @@ lpfc_sli4_eq_get(struct lpfc_queue *q)
 	struct lpfc_eqe *eqe = q->qe[q->hba_index].eqe;
 
 	/* If the next EQE is not valid then we are done */
-	if (!bf_get(lpfc_eqe_valid, eqe))
+	if (!bf_get_le32(lpfc_eqe_valid, eqe))
 		return NULL;
 	/* If the host has not yet processed the next entry then we are done */
 	if (((q->hba_index + 1) % q->entry_count) == q->host_index)
@@ -247,7 +248,7 @@ lpfc_sli4_eq_release(struct lpfc_queue *q, bool arm)
 	/* while there are valid entries */
 	while (q->hba_index != q->host_index) {
 		temp_eqe = q->qe[q->host_index].eqe;
-		bf_set(lpfc_eqe_valid, temp_eqe, 0);
+		bf_set_le32(lpfc_eqe_valid, temp_eqe, 0);
 		released++;
 		q->host_index = ((q->host_index + 1) % q->entry_count);
 	}
@@ -285,7 +286,7 @@ lpfc_sli4_cq_get(struct lpfc_queue *q)
 	struct lpfc_cqe *cqe;
 
 	/* If the next CQE is not valid then we are done */
-	if (!bf_get(lpfc_cqe_valid, q->qe[q->hba_index].cqe))
+	if (!bf_get_le32(lpfc_cqe_valid, q->qe[q->hba_index].cqe))
 		return NULL;
 	/* If the host has not yet processed the next entry then we are done */
 	if (((q->hba_index + 1) % q->entry_count) == q->host_index)
@@ -321,7 +322,7 @@ lpfc_sli4_cq_release(struct lpfc_queue *q, bool arm)
 	/* while there are valid entries */
 	while (q->hba_index != q->host_index) {
 		temp_qe = q->qe[q->host_index].cqe;
-		bf_set(lpfc_cqe_valid, temp_qe, 0);
+		bf_set_le32(lpfc_cqe_valid, temp_qe, 0);
 		released++;
 		q->host_index = ((q->host_index + 1) % q->entry_count);
 	}
@@ -455,6 +456,11 @@ __lpfc_sli_get_iocbq(struct lpfc_hba *phba)
 	struct lpfc_iocbq * iocbq = NULL;
 
 	list_remove_head(lpfc_iocb_list, iocbq, struct lpfc_iocbq, list);
+
+	if (iocbq)
+		phba->iocb_cnt++;
+	if (phba->iocb_cnt > phba->iocb_max)
+		phba->iocb_max = phba->iocb_cnt;
 	return iocbq;
 }
 
@@ -508,8 +514,331 @@ __lpfc_get_active_sglq(struct lpfc_hba *phba, uint16_t xritag)
 }
 
 /**
+ * __lpfc_set_rrq_active - set RRQ active bit in the ndlp's xri_bitmap.
+ * @phba: Pointer to HBA context object.
+ * @ndlp: nodelist pointer for this target.
+ * @xritag: xri used in this exchange.
+ * @rxid: Remote Exchange ID.
+ * @send_rrq: Flag used to determine if we should send rrq els cmd.
+ *
+ * This function is called with hbalock held.
+ * The active bit is set in the ndlp's active rrq xri_bitmap. Allocates an
+ * rrq struct and adds it to the active_rrq_list.
+ *
+ * returns  0 for rrq slot for this xri
+ *         < 0  Were not able to get rrq mem or invalid parameter.
+ **/
+static int
+__lpfc_set_rrq_active(struct lpfc_hba *phba, struct lpfc_nodelist *ndlp,
+		uint16_t xritag, uint16_t rxid, uint16_t send_rrq)
+{
+	uint16_t adj_xri;
+	struct lpfc_node_rrq *rrq;
+	int empty;
+	uint32_t did = 0;
+
+
+	if (!ndlp)
+		return -EINVAL;
+
+	if (!phba->cfg_enable_rrq)
+		return -EINVAL;
+
+	if (phba->pport->load_flag & FC_UNLOADING) {
+		phba->hba_flag &= ~HBA_RRQ_ACTIVE;
+		goto out;
+	}
+	did = ndlp->nlp_DID;
+
+	/*
+	 * set the active bit even if there is no mem available.
+	 */
+	adj_xri = xritag - phba->sli4_hba.max_cfg_param.xri_base;
+
+	if (NLP_CHK_FREE_REQ(ndlp))
+		goto out;
+
+	if (ndlp->vport && (ndlp->vport->load_flag & FC_UNLOADING))
+		goto out;
+
+	if (test_and_set_bit(adj_xri, ndlp->active_rrqs.xri_bitmap))
+		goto out;
+
+	rrq = mempool_alloc(phba->rrq_pool, GFP_KERNEL);
+	if (rrq) {
+		rrq->send_rrq = send_rrq;
+		rrq->xritag = xritag;
+		rrq->rrq_stop_time = jiffies + HZ * (phba->fc_ratov + 1);
+		rrq->ndlp = ndlp;
+		rrq->nlp_DID = ndlp->nlp_DID;
+		rrq->vport = ndlp->vport;
+		rrq->rxid = rxid;
+		empty = list_empty(&phba->active_rrq_list);
+		rrq->send_rrq = send_rrq;
+		list_add_tail(&rrq->list, &phba->active_rrq_list);
+		if (!(phba->hba_flag & HBA_RRQ_ACTIVE)) {
+			phba->hba_flag |= HBA_RRQ_ACTIVE;
+			if (empty)
+				lpfc_worker_wake_up(phba);
+		}
+		return 0;
+	}
+out:
+	lpfc_printf_log(phba, KERN_INFO, LOG_SLI,
+			"2921 Can't set rrq active xri:0x%x rxid:0x%x"
+			" DID:0x%x Send:%d\n",
+			xritag, rxid, did, send_rrq);
+	return -EINVAL;
+}
+
+/**
+ * lpfc_clr_rrq_active - Clears RRQ active bit in xri_bitmap.
+ * @phba: Pointer to HBA context object.
+ * @xritag: xri used in this exchange.
+ * @rrq: The RRQ to be cleared.
+ *
+ **/
+void
+lpfc_clr_rrq_active(struct lpfc_hba *phba,
+		    uint16_t xritag,
+		    struct lpfc_node_rrq *rrq)
+{
+	uint16_t adj_xri;
+	struct lpfc_nodelist *ndlp = NULL;
+
+	if ((rrq->vport) && NLP_CHK_NODE_ACT(rrq->ndlp))
+		ndlp = lpfc_findnode_did(rrq->vport, rrq->nlp_DID);
+
+	/* The target DID could have been swapped (cable swap)
+	 * we should use the ndlp from the findnode if it is
+	 * available.
+	 */
+	if ((!ndlp) && rrq->ndlp)
+		ndlp = rrq->ndlp;
+
+	if (!ndlp)
+		goto out;
+
+	adj_xri = xritag - phba->sli4_hba.max_cfg_param.xri_base;
+	if (test_and_clear_bit(adj_xri, ndlp->active_rrqs.xri_bitmap)) {
+		rrq->send_rrq = 0;
+		rrq->xritag = 0;
+		rrq->rrq_stop_time = 0;
+	}
+out:
+	mempool_free(rrq, phba->rrq_pool);
+}
+
+/**
+ * lpfc_handle_rrq_active - Checks if RRQ has waithed RATOV.
+ * @phba: Pointer to HBA context object.
+ *
+ * This function is called with hbalock held. This function
+ * Checks if stop_time (ratov from setting rrq active) has
+ * been reached, if it has and the send_rrq flag is set then
+ * it will call lpfc_send_rrq. If the send_rrq flag is not set
+ * then it will just call the routine to clear the rrq and
+ * free the rrq resource.
+ * The timer is set to the next rrq that is going to expire before
+ * leaving the routine.
+ *
+ **/
+void
+lpfc_handle_rrq_active(struct lpfc_hba *phba)
+{
+	struct lpfc_node_rrq *rrq;
+	struct lpfc_node_rrq *nextrrq;
+	unsigned long next_time;
+	unsigned long iflags;
+	LIST_HEAD(send_rrq);
+
+	spin_lock_irqsave(&phba->hbalock, iflags);
+	phba->hba_flag &= ~HBA_RRQ_ACTIVE;
+	next_time = jiffies + HZ * (phba->fc_ratov + 1);
+	list_for_each_entry_safe(rrq, nextrrq,
+				 &phba->active_rrq_list, list) {
+		if (time_after(jiffies, rrq->rrq_stop_time))
+			list_move(&rrq->list, &send_rrq);
+		else if (time_before(rrq->rrq_stop_time, next_time))
+			next_time = rrq->rrq_stop_time;
+	}
+	spin_unlock_irqrestore(&phba->hbalock, iflags);
+	if (!list_empty(&phba->active_rrq_list))
+		mod_timer(&phba->rrq_tmr, next_time);
+	list_for_each_entry_safe(rrq, nextrrq, &send_rrq, list) {
+		list_del(&rrq->list);
+		if (!rrq->send_rrq)
+			/* this call will free the rrq */
+		lpfc_clr_rrq_active(phba, rrq->xritag, rrq);
+		else if (lpfc_send_rrq(phba, rrq)) {
+			/* if we send the rrq then the completion handler
+			*  will clear the bit in the xribitmap.
+			*/
+			lpfc_clr_rrq_active(phba, rrq->xritag,
+					    rrq);
+		}
+	}
+}
+
+/**
+ * lpfc_get_active_rrq - Get the active RRQ for this exchange.
+ * @vport: Pointer to vport context object.
+ * @xri: The xri used in the exchange.
+ * @did: The targets DID for this exchange.
+ *
+ * returns NULL = rrq not found in the phba->active_rrq_list.
+ *         rrq = rrq for this xri and target.
+ **/
+struct lpfc_node_rrq *
+lpfc_get_active_rrq(struct lpfc_vport *vport, uint16_t xri, uint32_t did)
+{
+	struct lpfc_hba *phba = vport->phba;
+	struct lpfc_node_rrq *rrq;
+	struct lpfc_node_rrq *nextrrq;
+	unsigned long iflags;
+
+	if (phba->sli_rev != LPFC_SLI_REV4)
+		return NULL;
+	spin_lock_irqsave(&phba->hbalock, iflags);
+	list_for_each_entry_safe(rrq, nextrrq, &phba->active_rrq_list, list) {
+		if (rrq->vport == vport && rrq->xritag == xri &&
+				rrq->nlp_DID == did){
+			list_del(&rrq->list);
+			spin_unlock_irqrestore(&phba->hbalock, iflags);
+			return rrq;
+		}
+	}
+	spin_unlock_irqrestore(&phba->hbalock, iflags);
+	return NULL;
+}
+
+/**
+ * lpfc_cleanup_vports_rrqs - Remove and clear the active RRQ for this vport.
+ * @vport: Pointer to vport context object.
+ * @ndlp: Pointer to the lpfc_node_list structure.
+ * If ndlp is NULL Remove all active RRQs for this vport from the
+ * phba->active_rrq_list and clear the rrq.
+ * If ndlp is not NULL then only remove rrqs for this vport & this ndlp.
+ **/
+void
+lpfc_cleanup_vports_rrqs(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp)
+
+{
+	struct lpfc_hba *phba = vport->phba;
+	struct lpfc_node_rrq *rrq;
+	struct lpfc_node_rrq *nextrrq;
+	unsigned long iflags;
+	LIST_HEAD(rrq_list);
+
+	if (phba->sli_rev != LPFC_SLI_REV4)
+		return;
+	if (!ndlp) {
+		lpfc_sli4_vport_delete_els_xri_aborted(vport);
+		lpfc_sli4_vport_delete_fcp_xri_aborted(vport);
+	}
+	spin_lock_irqsave(&phba->hbalock, iflags);
+	list_for_each_entry_safe(rrq, nextrrq, &phba->active_rrq_list, list)
+		if ((rrq->vport == vport) && (!ndlp  || rrq->ndlp == ndlp))
+			list_move(&rrq->list, &rrq_list);
+	spin_unlock_irqrestore(&phba->hbalock, iflags);
+
+	list_for_each_entry_safe(rrq, nextrrq, &rrq_list, list) {
+		list_del(&rrq->list);
+		lpfc_clr_rrq_active(phba, rrq->xritag, rrq);
+	}
+}
+
+/**
+ * lpfc_cleanup_wt_rrqs - Remove all rrq's from the active list.
+ * @phba: Pointer to HBA context object.
+ *
+ * Remove all rrqs from the phba->active_rrq_list and free them by
+ * calling __lpfc_clr_active_rrq
+ *
+ **/
+void
+lpfc_cleanup_wt_rrqs(struct lpfc_hba *phba)
+{
+	struct lpfc_node_rrq *rrq;
+	struct lpfc_node_rrq *nextrrq;
+	unsigned long next_time;
+	unsigned long iflags;
+	LIST_HEAD(rrq_list);
+
+	if (phba->sli_rev != LPFC_SLI_REV4)
+		return;
+	spin_lock_irqsave(&phba->hbalock, iflags);
+	phba->hba_flag &= ~HBA_RRQ_ACTIVE;
+	next_time = jiffies + HZ * (phba->fc_ratov * 2);
+	list_splice_init(&phba->active_rrq_list, &rrq_list);
+	spin_unlock_irqrestore(&phba->hbalock, iflags);
+
+	list_for_each_entry_safe(rrq, nextrrq, &rrq_list, list) {
+		list_del(&rrq->list);
+		lpfc_clr_rrq_active(phba, rrq->xritag, rrq);
+	}
+	if (!list_empty(&phba->active_rrq_list))
+		mod_timer(&phba->rrq_tmr, next_time);
+}
+
+
+/**
+ * lpfc_test_rrq_active - Test RRQ bit in xri_bitmap.
+ * @phba: Pointer to HBA context object.
+ * @ndlp: Targets nodelist pointer for this exchange.
+ * @xritag the xri in the bitmap to test.
+ *
+ * This function is called with hbalock held. This function
+ * returns 0 = rrq not active for this xri
+ *         1 = rrq is valid for this xri.
+ **/
+int
+lpfc_test_rrq_active(struct lpfc_hba *phba, struct lpfc_nodelist *ndlp,
+			uint16_t  xritag)
+{
+	uint16_t adj_xri;
+
+	adj_xri = xritag - phba->sli4_hba.max_cfg_param.xri_base;
+	if (!ndlp)
+		return 0;
+	if (test_bit(adj_xri, ndlp->active_rrqs.xri_bitmap))
+			return 1;
+	else
+		return 0;
+}
+
+/**
+ * lpfc_set_rrq_active - set RRQ active bit in xri_bitmap.
+ * @phba: Pointer to HBA context object.
+ * @ndlp: nodelist pointer for this target.
+ * @xritag: xri used in this exchange.
+ * @rxid: Remote Exchange ID.
+ * @send_rrq: Flag used to determine if we should send rrq els cmd.
+ *
+ * This function takes the hbalock.
+ * The active bit is always set in the active rrq xri_bitmap even
+ * if there is no slot avaiable for the other rrq information.
+ *
+ * returns 0 rrq actived for this xri
+ *         < 0 No memory or invalid ndlp.
+ **/
+int
+lpfc_set_rrq_active(struct lpfc_hba *phba, struct lpfc_nodelist *ndlp,
+			uint16_t xritag, uint16_t rxid, uint16_t send_rrq)
+{
+	int ret;
+	unsigned long iflags;
+
+	spin_lock_irqsave(&phba->hbalock, iflags);
+	ret = __lpfc_set_rrq_active(phba, ndlp, xritag, rxid, send_rrq);
+	spin_unlock_irqrestore(&phba->hbalock, iflags);
+	return ret;
+}
+
+/**
  * __lpfc_sli_get_sglq - Allocates an iocb object from sgl pool
  * @phba: Pointer to HBA context object.
+ * @piocb: Pointer to the iocbq.
  *
  * This function is called with hbalock held. This function
  * Gets a new driver sglq object from the sglq list. If the
@@ -517,17 +846,51 @@ __lpfc_get_active_sglq(struct lpfc_hba *phba, uint16_t xritag)
  * allocated sglq object else it returns NULL.
  **/
 static struct lpfc_sglq *
-__lpfc_sli_get_sglq(struct lpfc_hba *phba)
+__lpfc_sli_get_sglq(struct lpfc_hba *phba, struct lpfc_iocbq *piocbq)
 {
 	struct list_head *lpfc_sgl_list = &phba->sli4_hba.lpfc_sgl_list;
 	struct lpfc_sglq *sglq = NULL;
+	struct lpfc_sglq *start_sglq = NULL;
 	uint16_t adj_xri;
+	struct lpfc_scsi_buf *lpfc_cmd;
+	struct lpfc_nodelist *ndlp;
+	int found = 0;
+
+	if (piocbq->iocb_flag &  LPFC_IO_FCP) {
+		lpfc_cmd = (struct lpfc_scsi_buf *) piocbq->context1;
+		ndlp = lpfc_cmd->rdata->pnode;
+	} else  if ((piocbq->iocb.ulpCommand == CMD_GEN_REQUEST64_CR) &&
+			!(piocbq->iocb_flag & LPFC_IO_LIBDFC))
+		ndlp = piocbq->context_un.ndlp;
+	else
+		ndlp = piocbq->context1;
+
 	list_remove_head(lpfc_sgl_list, sglq, struct lpfc_sglq, list);
-	if (!sglq)
-		return NULL;
-	adj_xri = sglq->sli4_xritag - phba->sli4_hba.max_cfg_param.xri_base;
-	phba->sli4_hba.lpfc_sglq_active_list[adj_xri] = sglq;
-	sglq->state = SGL_ALLOCATED;
+	start_sglq = sglq;
+	while (!found) {
+		if (!sglq)
+			return NULL;
+		adj_xri = sglq->sli4_xritag -
+				phba->sli4_hba.max_cfg_param.xri_base;
+		if (lpfc_test_rrq_active(phba, ndlp, sglq->sli4_xritag)) {
+			/* This xri has an rrq outstanding for this DID.
+			 * put it back in the list and get another xri.
+			 */
+			list_add_tail(&sglq->list, lpfc_sgl_list);
+			sglq = NULL;
+			list_remove_head(lpfc_sgl_list, sglq,
+						struct lpfc_sglq, list);
+			if (sglq == start_sglq) {
+				sglq = NULL;
+				break;
+			} else
+				continue;
+		}
+		sglq->ndlp = ndlp;
+		found = 1;
+		phba->sli4_hba.lpfc_sglq_active_list[adj_xri] = sglq;
+		sglq->state = SGL_ALLOCATED;
+	}
 	return sglq;
 }
 
@@ -575,7 +938,8 @@ __lpfc_sli_release_iocbq_s4(struct lpfc_hba *phba, struct lpfc_iocbq *iocbq)
 {
 	struct lpfc_sglq *sglq;
 	size_t start_clean = offsetof(struct lpfc_iocbq, iocb);
-	unsigned long iflag;
+	unsigned long iflag = 0;
+	struct lpfc_sli_ring *pring = &phba->sli.ring[LPFC_ELS_RING];
 
 	if (iocbq->sli4_xritag == NO_XRI)
 		sglq = NULL;
@@ -592,7 +956,13 @@ __lpfc_sli_release_iocbq_s4(struct lpfc_hba *phba, struct lpfc_iocbq *iocbq)
 				&phba->sli4_hba.abts_sgl_list_lock, iflag);
 		} else {
 			sglq->state = SGL_FREED;
-			list_add(&sglq->list, &phba->sli4_hba.lpfc_sgl_list);
+			sglq->ndlp = NULL;
+			list_add_tail(&sglq->list,
+				&phba->sli4_hba.lpfc_sgl_list);
+
+			/* Check if TXQ queue needs to be serviced */
+			if (pring->txq_cnt)
+				lpfc_worker_wake_up(phba);
 		}
 	}
 
@@ -604,6 +974,7 @@ __lpfc_sli_release_iocbq_s4(struct lpfc_hba *phba, struct lpfc_iocbq *iocbq)
 	iocbq->sli4_xritag = NO_XRI;
 	list_add_tail(&iocbq->list, &phba->lpfc_iocb_list);
 }
+
 
 /**
  * __lpfc_sli_release_iocbq_s3 - Release iocb to the iocb pool
@@ -642,6 +1013,7 @@ static void
 __lpfc_sli_release_iocbq(struct lpfc_hba *phba, struct lpfc_iocbq *iocbq)
 {
 	phba->__lpfc_sli_release_iocbq(phba, iocbq);
+	phba->iocb_cnt--;
 }
 
 /**
@@ -872,7 +1244,11 @@ lpfc_sli_ringtxcmpl_put(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 			struct lpfc_iocbq *piocb)
 {
 	list_add_tail(&piocb->list, &pring->txcmplq);
+	piocb->iocb_flag |= LPFC_IO_ON_Q;
 	pring->txcmplq_cnt++;
+	if (pring->txcmplq_cnt > pring->txcmplq_max)
+		pring->txcmplq_max = pring->txcmplq_cnt;
+
 	if ((unlikely(pring->ringno == LPFC_ELS_RING)) &&
 	   (piocb->iocb.ulpCommand != CMD_ABORT_XRI_CN) &&
 	   (piocb->iocb.ulpCommand != CMD_CLOSE_XRI_CN)) {
@@ -897,7 +1273,7 @@ lpfc_sli_ringtxcmpl_put(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
  * the txq, the function returns first iocb in the list after
  * removing the iocb from the list, else it returns NULL.
  **/
-static struct lpfc_iocbq *
+struct lpfc_iocbq *
 lpfc_sli_ringtx_get(struct lpfc_hba *phba, struct lpfc_sli_ring *pring)
 {
 	struct lpfc_iocbq *cmd_iocb;
@@ -1030,7 +1406,7 @@ lpfc_sli_next_iotag(struct lpfc_hba *phba, struct lpfc_iocbq *iocbq)
 	} else
 		spin_unlock_irq(&phba->hbalock);
 
-	lpfc_printf_log(phba, KERN_ERR,LOG_SLI,
+	lpfc_printf_log(phba, KERN_WARNING, LOG_SLI,
 			"0318 Failed to allocate IOTAG.last IOTAG is %d\n",
 			psli->last_iotag);
 
@@ -1618,7 +1994,6 @@ lpfc_sli_chk_mbx_command(uint8_t mbxCommand)
 	case MBX_READ_LNK_STAT:
 	case MBX_REG_LOGIN:
 	case MBX_UNREG_LOGIN:
-	case MBX_READ_LA:
 	case MBX_CLEAR_LA:
 	case MBX_DUMP_MEMORY:
 	case MBX_DUMP_CONTEXT:
@@ -1640,7 +2015,7 @@ lpfc_sli_chk_mbx_command(uint8_t mbxCommand)
 	case MBX_READ_SPARM64:
 	case MBX_READ_RPI64:
 	case MBX_REG_LOGIN64:
-	case MBX_READ_LA64:
+	case MBX_READ_TOPOLOGY:
 	case MBX_WRITE_WWN:
 	case MBX_SET_DEBUG:
 	case MBX_LOAD_EXP_ROM:
@@ -1659,6 +2034,10 @@ lpfc_sli_chk_mbx_command(uint8_t mbxCommand)
 	case MBX_INIT_VPI:
 	case MBX_INIT_VFI:
 	case MBX_RESUME_RPI:
+	case MBX_READ_EVENT_LOG_STATUS:
+	case MBX_READ_EVENT_LOG:
+	case MBX_SECURITY_MGMT:
+	case MBX_AUTH_PORT:
 		ret = mbxCommand;
 		break;
 	default:
@@ -1712,10 +2091,12 @@ lpfc_sli_wake_mbox_wait(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmboxq)
 void
 lpfc_sli_def_mbox_cmpl(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmb)
 {
+	struct lpfc_vport  *vport = pmb->vport;
 	struct lpfc_dmabuf *mp;
+	struct lpfc_nodelist *ndlp;
+	struct Scsi_Host *shost;
 	uint16_t rpi, vpi;
 	int rc;
-	struct lpfc_vport  *vport = pmb->vport;
 
 	mp = (struct lpfc_dmabuf *) (pmb->context1);
 
@@ -1723,10 +2104,6 @@ lpfc_sli_def_mbox_cmpl(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmb)
 		lpfc_mbuf_free(phba, mp->virt, mp->phys);
 		kfree(mp);
 	}
-
-	if ((pmb->u.mb.mbxCommand == MBX_UNREG_LOGIN) &&
-	    (phba->sli_rev == LPFC_SLI_REV4))
-		lpfc_sli4_free_rpi(phba, pmb->u.mb.un.varUnregLogin.rpi);
 
 	/*
 	 * If a REG_LOGIN succeeded  after node is destroyed or node
@@ -1744,17 +2121,28 @@ lpfc_sli_def_mbox_cmpl(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmb)
 			return;
 	}
 
-	/* Unreg VPI, if the REG_VPI succeed after VLink failure */
 	if ((pmb->u.mb.mbxCommand == MBX_REG_VPI) &&
 		!(phba->pport->load_flag & FC_UNLOADING) &&
 		!pmb->u.mb.mbxStatus) {
-		lpfc_unreg_vpi(phba, pmb->u.mb.un.varRegVpi.vpi, pmb);
-		pmb->vport = vport;
-		pmb->mbox_cmpl = lpfc_sli_def_mbox_cmpl;
-		rc = lpfc_sli_issue_mbox(phba, pmb, MBX_NOWAIT);
-		if (rc != MBX_NOT_FINISHED)
-			return;
+		shost = lpfc_shost_from_vport(vport);
+		spin_lock_irq(shost->host_lock);
+		vport->vpi_state |= LPFC_VPI_REGISTERED;
+		vport->fc_flag &= ~FC_VPORT_NEEDS_REG_VPI;
+		spin_unlock_irq(shost->host_lock);
 	}
+
+	if (pmb->u.mb.mbxCommand == MBX_REG_LOGIN64) {
+		ndlp = (struct lpfc_nodelist *)pmb->context2;
+		lpfc_nlp_put(ndlp);
+		pmb->context2 = NULL;
+	}
+
+	/* Check security permission status on INIT_LINK mailbox command */
+	if ((pmb->u.mb.mbxCommand == MBX_INIT_LINK) &&
+	    (pmb->u.mb.mbxStatus == MBXERR_SEC_NO_PERMISSION))
+		lpfc_printf_log(phba, KERN_ERR, LOG_MBOX | LOG_SLI,
+				"2860 SLI authentication is required "
+				"for INIT_LINK but has not done yet\n");
 
 	if (bf_get(lpfc_mqe_command, &pmb->u.mqe) == MBX_SLI4_CONFIG)
 		lpfc_sli4_mbox_cmd_free(phba, pmb);
@@ -2148,7 +2536,10 @@ lpfc_sli_iocbq_lookup(struct lpfc_hba *phba,
 	if (iotag != 0 && iotag <= phba->sli.last_iotag) {
 		cmd_iocb = phba->sli.iocbq_lookup[iotag];
 		list_del_init(&cmd_iocb->list);
-		pring->txcmplq_cnt--;
+		if (cmd_iocb->iocb_flag & LPFC_IO_ON_Q) {
+			pring->txcmplq_cnt--;
+			cmd_iocb->iocb_flag &= ~LPFC_IO_ON_Q;
+		}
 		return cmd_iocb;
 	}
 
@@ -2181,7 +2572,10 @@ lpfc_sli_iocbq_lookup_by_tag(struct lpfc_hba *phba,
 	if (iotag != 0 && iotag <= phba->sli.last_iotag) {
 		cmd_iocb = phba->sli.iocbq_lookup[iotag];
 		list_del_init(&cmd_iocb->list);
-		pring->txcmplq_cnt--;
+		if (cmd_iocb->iocb_flag & LPFC_IO_ON_Q) {
+			cmd_iocb->iocb_flag &= ~LPFC_IO_ON_Q;
+			pring->txcmplq_cnt--;
+		}
 		return cmd_iocb;
 	}
 
@@ -2423,7 +2817,7 @@ void lpfc_poll_eratt(unsigned long ptr)
  * This function is called from the interrupt context when there is a ring
  * event for the fcp ring. The caller does not hold any lock.
  * The function processes each response iocb in the response ring until it
- * finds an iocb with LE bit set and chains all the iocbs upto the iocb with
+ * finds an iocb with LE bit set and chains all the iocbs up to the iocb with
  * LE bit set. The function will call the completion handler of the command iocb
  * if the response iocb indicates a completion for a command iocb or it is
  * an abort completion. The function will call lpfc_sli_process_unsol_iocb
@@ -3083,7 +3477,8 @@ lpfc_sli_brdready_s3(struct lpfc_hba *phba, uint32_t mask)
 	int retval = 0;
 
 	/* Read the HBA Host Status Register */
-	status = readl(phba->HSregaddr);
+	if (lpfc_readl(phba->HSregaddr, &status))
+		return 1;
 
 	/*
 	 * Check status register every 100ms for 5 retries, then every
@@ -3108,7 +3503,10 @@ lpfc_sli_brdready_s3(struct lpfc_hba *phba, uint32_t mask)
 			lpfc_sli_brdrestart(phba);
 		}
 		/* Read the HBA Host Status Register */
-		status = readl(phba->HSregaddr);
+		if (lpfc_readl(phba->HSregaddr, &status)) {
+			retval = 1;
+			break;
+		}
 	}
 
 	/* Check to see if any errors occurred during init */
@@ -3190,7 +3588,7 @@ void lpfc_reset_barrier(struct lpfc_hba *phba)
 	uint32_t __iomem *resp_buf;
 	uint32_t __iomem *mbox_buf;
 	volatile uint32_t mbox;
-	uint32_t hc_copy;
+	uint32_t hc_copy, ha_copy, resp_data;
 	int  i;
 	uint8_t hdrtype;
 
@@ -3207,12 +3605,15 @@ void lpfc_reset_barrier(struct lpfc_hba *phba)
 	resp_buf = phba->MBslimaddr;
 
 	/* Disable the error attention */
-	hc_copy = readl(phba->HCregaddr);
+	if (lpfc_readl(phba->HCregaddr, &hc_copy))
+		return;
 	writel((hc_copy & ~HC_ERINT_ENA), phba->HCregaddr);
 	readl(phba->HCregaddr); /* flush */
 	phba->link_flag |= LS_IGNORE_ERATT;
 
-	if (readl(phba->HAregaddr) & HA_ERATT) {
+	if (lpfc_readl(phba->HAregaddr, &ha_copy))
+		return;
+	if (ha_copy & HA_ERATT) {
 		/* Clear Chip error bit */
 		writel(HA_ERATT, phba->HAregaddr);
 		phba->pport->stopped = 1;
@@ -3226,11 +3627,18 @@ void lpfc_reset_barrier(struct lpfc_hba *phba)
 	mbox_buf = phba->MBslimaddr;
 	writel(mbox, mbox_buf);
 
-	for (i = 0;
-	     readl(resp_buf + 1) != ~(BARRIER_TEST_PATTERN) && i < 50; i++)
-		mdelay(1);
-
-	if (readl(resp_buf + 1) != ~(BARRIER_TEST_PATTERN)) {
+	for (i = 0; i < 50; i++) {
+		if (lpfc_readl((resp_buf + 1), &resp_data))
+			return;
+		if (resp_data != ~(BARRIER_TEST_PATTERN))
+			mdelay(1);
+		else
+			break;
+	}
+	resp_data = 0;
+	if (lpfc_readl((resp_buf + 1), &resp_data))
+		return;
+	if (resp_data  != ~(BARRIER_TEST_PATTERN)) {
 		if (phba->sli.sli_flag & LPFC_SLI_ACTIVE ||
 		    phba->pport->stopped)
 			goto restore_hc;
@@ -3239,13 +3647,26 @@ void lpfc_reset_barrier(struct lpfc_hba *phba)
 	}
 
 	((MAILBOX_t *)&mbox)->mbxOwner = OWN_HOST;
-	for (i = 0; readl(resp_buf) != mbox &&  i < 500; i++)
-		mdelay(1);
+	resp_data = 0;
+	for (i = 0; i < 500; i++) {
+		if (lpfc_readl(resp_buf, &resp_data))
+			return;
+		if (resp_data != mbox)
+			mdelay(1);
+		else
+			break;
+	}
 
 clear_errat:
 
-	while (!(readl(phba->HAregaddr) & HA_ERATT) && ++i < 500)
-		mdelay(1);
+	while (++i < 500) {
+		if (lpfc_readl(phba->HAregaddr, &ha_copy))
+			return;
+		if (!(ha_copy & HA_ERATT))
+			mdelay(1);
+		else
+			break;
+	}
 
 	if (readl(phba->HAregaddr) & HA_ERATT) {
 		writel(HA_ERATT, phba->HAregaddr);
@@ -3292,7 +3713,11 @@ lpfc_sli_brdkill(struct lpfc_hba *phba)
 
 	/* Disable the error attention */
 	spin_lock_irq(&phba->hbalock);
-	status = readl(phba->HCregaddr);
+	if (lpfc_readl(phba->HCregaddr, &status)) {
+		spin_unlock_irq(&phba->hbalock);
+		mempool_free(pmb, phba->mbox_mem_pool);
+		return 1;
+	}
 	status &= ~HC_ERINT_ENA;
 	writel(status, phba->HCregaddr);
 	readl(phba->HCregaddr); /* flush */
@@ -3326,11 +3751,12 @@ lpfc_sli_brdkill(struct lpfc_hba *phba)
 	 * 3 seconds we still set HBA_ERROR state because the status of the
 	 * board is now undefined.
 	 */
-	ha_copy = readl(phba->HAregaddr);
-
+	if (lpfc_readl(phba->HAregaddr, &ha_copy))
+		return 1;
 	while ((i++ < 30) && !(ha_copy & HA_ERATT)) {
 		mdelay(100);
-		ha_copy = readl(phba->HAregaddr);
+		if (lpfc_readl(phba->HAregaddr, &ha_copy))
+			return 1;
 	}
 
 	del_timer_sync(&psli->mbox_tmo);
@@ -3443,12 +3869,6 @@ lpfc_sli4_brdreset(struct lpfc_hba *phba)
 	phba->pport->fc_myDID = 0;
 	phba->pport->fc_prevDID = 0;
 
-	/* Turn off parity checking and serr during the physical reset */
-	pci_read_config_word(phba->pcidev, PCI_COMMAND, &cfg_value);
-	pci_write_config_word(phba->pcidev, PCI_COMMAND,
-			      (cfg_value &
-			      ~(PCI_COMMAND_PARITY | PCI_COMMAND_SERR)));
-
 	spin_lock_irq(&phba->hbalock);
 	psli->sli_flag &= ~(LPFC_PROCESS_LA);
 	phba->fcf.fcf_flag = 0;
@@ -3468,8 +3888,17 @@ lpfc_sli4_brdreset(struct lpfc_hba *phba)
 	/* Now physically reset the device */
 	lpfc_printf_log(phba, KERN_INFO, LOG_INIT,
 			"0389 Performing PCI function reset!\n");
+
+	/* Turn off parity checking and serr during the physical reset */
+	pci_read_config_word(phba->pcidev, PCI_COMMAND, &cfg_value);
+	pci_write_config_word(phba->pcidev, PCI_COMMAND, (cfg_value &
+			      ~(PCI_COMMAND_PARITY | PCI_COMMAND_SERR)));
+
 	/* Perform FCoE PCI function reset */
 	lpfc_pci_function_reset(phba);
+
+	/* Restore PCI cmd register */
+	pci_write_config_word(phba->pcidev, PCI_COMMAND, cfg_value);
 
 	return 0;
 }
@@ -3562,12 +3991,15 @@ static int
 lpfc_sli_brdrestart_s4(struct lpfc_hba *phba)
 {
 	struct lpfc_sli *psli = &phba->sli;
-
+	uint32_t hba_aer_enabled;
 
 	/* Restart HBA */
 	lpfc_printf_log(phba, KERN_INFO, LOG_SLI,
 			"0296 Restart HBA Data: x%x x%x\n",
 			phba->pport->port_state, psli->sli_flag);
+
+	/* Take PCIe device Advanced Error Reporting (AER) state */
+	hba_aer_enabled = phba->hba_flag & HBA_AER_ENABLED;
 
 	lpfc_sli4_brdreset(phba);
 
@@ -3579,6 +4011,10 @@ lpfc_sli_brdrestart_s4(struct lpfc_hba *phba)
 
 	memset(&psli->lnk_stat_offsets, 0, sizeof(psli->lnk_stat_offsets));
 	psli->stats_start = get_seconds();
+
+	/* Reset HBA AER if it was enabled, note hba_flag was reset above */
+	if (hba_aer_enabled)
+		pci_disable_pcie_error_reporting(phba->pcidev);
 
 	lpfc_hba_down_post(phba);
 
@@ -3614,17 +4050,22 @@ lpfc_sli_chipset_init(struct lpfc_hba *phba)
 	uint32_t status, i = 0;
 
 	/* Read the HBA Host Status Register */
-	status = readl(phba->HSregaddr);
+	if (lpfc_readl(phba->HSregaddr, &status))
+		return -EIO;
 
 	/* Check status register to see what current state is */
 	i = 0;
 	while ((status & (HS_FFRDY | HS_MBRDY)) != (HS_FFRDY | HS_MBRDY)) {
 
-		/* Check every 100ms for 5 retries, then every 500ms for 5, then
-		 * every 2.5 sec for 5, then reset board and every 2.5 sec for
-		 * 4.
+		/* Check every 10ms for 10 retries, then every 100ms for 90
+		 * retries, then every 1 sec for 50 retires for a total of
+		 * ~60 seconds before reset the board again and check every
+		 * 1 sec for 50 retries. The up to 60 seconds before the
+		 * board ready is required by the Falcon FIPS zeroization
+		 * complete, and any reset the board in between shall cause
+		 * restart of zeroization, further delay the board ready.
 		 */
-		if (i++ >= 20) {
+		if (i++ >= 200) {
 			/* Adapter failed to init, timeout, status reg
 			   <status> */
 			lpfc_printf_log(phba, KERN_ERR, LOG_INIT,
@@ -3652,21 +4093,21 @@ lpfc_sli_chipset_init(struct lpfc_hba *phba)
 			return -EIO;
 		}
 
-		if (i <= 5) {
+		if (i <= 10)
 			msleep(10);
-		} else if (i <= 10) {
-			msleep(500);
-		} else {
-			msleep(2500);
-		}
+		else if (i <= 100)
+			msleep(100);
+		else
+			msleep(1000);
 
-		if (i == 15) {
-				/* Do post */
+		if (i == 150) {
+			/* Do post */
 			phba->pport->port_state = LPFC_VPORT_UNKNOWN;
 			lpfc_sli_brdrestart(phba);
 		}
 		/* Read the HBA Host Status Register */
-		status = readl(phba->HSregaddr);
+		if (lpfc_readl(phba->HSregaddr, &status))
+			return -EIO;
 	}
 
 	/* Check to see if any errors occurred during init */
@@ -3792,7 +4233,7 @@ lpfc_sli_hbq_setup(struct lpfc_hba *phba)
 
 			phba->link_state = LPFC_HBA_ERROR;
 			mempool_free(pmb, phba->mbox_mem_pool);
-			return ENXIO;
+			return -ENXIO;
 		}
 	}
 	phba->hbq_count = hbq_count;
@@ -3883,8 +4324,8 @@ lpfc_sli_config_port(struct lpfc_hba *phba, int sli_mode)
 		phba->sli3_options &= ~(LPFC_SLI3_NPIV_ENABLED |
 					LPFC_SLI3_HBQ_ENABLED |
 					LPFC_SLI3_CRP_ENABLED |
-					LPFC_SLI3_INB_ENABLED |
-					LPFC_SLI3_BG_ENABLED);
+					LPFC_SLI3_BG_ENABLED |
+					LPFC_SLI3_DSS_ENABLED);
 		if (rc != MBX_SUCCESS) {
 			lpfc_printf_log(phba, KERN_ERR, LOG_INIT,
 				"0442 Adapter failed to init, mbxCmd x%x "
@@ -3919,26 +4360,30 @@ lpfc_sli_config_port(struct lpfc_hba *phba, int sli_mode)
 
 		} else
 			phba->max_vpi = 0;
-		if (pmb->u.mb.un.varCfgPort.gdss)
+		phba->fips_level = 0;
+		phba->fips_spec_rev = 0;
+		if (pmb->u.mb.un.varCfgPort.gdss) {
 			phba->sli3_options |= LPFC_SLI3_DSS_ENABLED;
+			phba->fips_level = pmb->u.mb.un.varCfgPort.fips_level;
+			phba->fips_spec_rev = pmb->u.mb.un.varCfgPort.fips_rev;
+			lpfc_printf_log(phba, KERN_INFO, LOG_INIT,
+					"2850 Security Crypto Active. FIPS x%d "
+					"(Spec Rev: x%d)",
+					phba->fips_level, phba->fips_spec_rev);
+		}
+		if (pmb->u.mb.un.varCfgPort.sec_err) {
+			lpfc_printf_log(phba, KERN_ERR, LOG_INIT,
+					"2856 Config Port Security Crypto "
+					"Error: x%x ",
+					pmb->u.mb.un.varCfgPort.sec_err);
+		}
 		if (pmb->u.mb.un.varCfgPort.gerbm)
 			phba->sli3_options |= LPFC_SLI3_HBQ_ENABLED;
 		if (pmb->u.mb.un.varCfgPort.gcrp)
 			phba->sli3_options |= LPFC_SLI3_CRP_ENABLED;
-		if (pmb->u.mb.un.varCfgPort.ginb) {
-			phba->sli3_options |= LPFC_SLI3_INB_ENABLED;
-			phba->hbq_get = phba->mbox->us.s3_inb_pgp.hbq_get;
-			phba->port_gp = phba->mbox->us.s3_inb_pgp.port;
-			phba->inb_ha_copy = &phba->mbox->us.s3_inb_pgp.ha_copy;
-			phba->inb_counter = &phba->mbox->us.s3_inb_pgp.counter;
-			phba->inb_last_counter =
-					phba->mbox->us.s3_inb_pgp.counter;
-		} else {
-			phba->hbq_get = phba->mbox->us.s3_pgp.hbq_get;
-			phba->port_gp = phba->mbox->us.s3_pgp.port;
-			phba->inb_ha_copy = NULL;
-			phba->inb_counter = NULL;
-		}
+
+		phba->hbq_get = phba->mbox->us.s3_pgp.hbq_get;
+		phba->port_gp = phba->mbox->us.s3_pgp.port;
 
 		if (phba->cfg_enable_bg) {
 			if (pmb->u.mb.un.varCfgPort.gbg)
@@ -3951,8 +4396,6 @@ lpfc_sli_config_port(struct lpfc_hba *phba, int sli_mode)
 	} else {
 		phba->hbq_get = NULL;
 		phba->port_gp = phba->mbox->us.s2.port;
-		phba->inb_ha_copy = NULL;
-		phba->inb_counter = NULL;
 		phba->max_vpi = 0;
 	}
 do_prep_failed:
@@ -4153,7 +4596,7 @@ lpfc_sli4_read_fcoe_params(struct lpfc_hba *phba,
  *
  * Return codes
  * 	0 - successful
- * 	ENOMEM - could not allocated memory.
+ * 	-ENOMEM - could not allocated memory.
  **/
 static int
 lpfc_sli4_read_rev(struct lpfc_hba *phba, LPFC_MBOXQ_t *mboxq,
@@ -4212,7 +4655,8 @@ lpfc_sli4_read_rev(struct lpfc_hba *phba, LPFC_MBOXQ_t *mboxq,
 	if (mqe->un.read_rev.avail_vpd_len < *vpd_size)
 		*vpd_size = mqe->un.read_rev.avail_vpd_len;
 
-	lpfc_sli_pcimem_bcopy(dmabuf->virt, vpd, *vpd_size);
+	memcpy(vpd, dmabuf->virt, *vpd_size);
+
 	dma_free_coherent(&phba->pcidev->dev, dma_size,
 			  dmabuf->virt, dmabuf->phys);
 	kfree(dmabuf);
@@ -4264,6 +4708,10 @@ lpfc_sli4_hba_setup(struct lpfc_hba *phba)
 	struct lpfc_vport *vport = phba->pport;
 	struct lpfc_dmabuf *mp;
 
+	/*
+	 * TODO:  Why does this routine execute these task in a different
+	 * order from probe?
+	 */
 	/* Perform a PCI function reset to start from clean */
 	rc = lpfc_pci_function_reset(phba);
 	if (unlikely(rc))
@@ -4296,7 +4744,7 @@ lpfc_sli4_hba_setup(struct lpfc_hba *phba)
 			"2570 Failed to read FCoE parameters\n");
 
 	/* Issue READ_REV to collect vpd and FW information. */
-	vpd_size = PAGE_SIZE;
+	vpd_size = SLI4_PAGE_SIZE;
 	vpd = kzalloc(vpd_size, GFP_KERNEL);
 	if (!vpd) {
 		rc = -ENOMEM;
@@ -4304,13 +4752,16 @@ lpfc_sli4_hba_setup(struct lpfc_hba *phba)
 	}
 
 	rc = lpfc_sli4_read_rev(phba, mboxq, vpd, &vpd_size);
-	if (unlikely(rc))
-		goto out_free_vpd;
-
+	if (unlikely(rc)) {
+		kfree(vpd);
+		goto out_free_mbox;
+	}
 	mqe = &mboxq->u.mqe;
 	phba->sli_rev = bf_get(lpfc_mbx_rd_rev_sli_lvl, &mqe->un.read_rev);
 	if (bf_get(lpfc_mbx_rd_rev_fcoe, &mqe->un.read_rev))
-		phba->hba_flag |= HBA_FCOE_SUPPORT;
+		phba->hba_flag |= HBA_FCOE_MODE;
+	else
+		phba->hba_flag &= ~HBA_FCOE_MODE;
 
 	if (bf_get(lpfc_mbx_rd_rev_cee_ver, &mqe->un.read_rev) ==
 		LPFC_DCBX_CEE_MODE)
@@ -4319,13 +4770,14 @@ lpfc_sli4_hba_setup(struct lpfc_hba *phba)
 		phba->hba_flag &= ~HBA_FIP_SUPPORT;
 
 	if (phba->sli_rev != LPFC_SLI_REV4 ||
-	    !(phba->hba_flag & HBA_FCOE_SUPPORT)) {
+	    !(phba->hba_flag & HBA_FCOE_MODE)) {
 		lpfc_printf_log(phba, KERN_ERR, LOG_MBOX | LOG_SLI,
 			"0376 READ_REV Error. SLI Level %d "
 			"FCoE enabled %d\n",
-			phba->sli_rev, phba->hba_flag & HBA_FCOE_SUPPORT);
+			phba->sli_rev, phba->hba_flag & HBA_FCOE_MODE);
 		rc = -EIO;
-		goto out_free_vpd;
+		kfree(vpd);
+		goto out_free_mbox;
 	}
 	/*
 	 * Evaluate the read rev and vpd data. Populate the driver
@@ -4339,6 +4791,7 @@ lpfc_sli4_hba_setup(struct lpfc_hba *phba)
 				"Using defaults.\n", rc);
 		rc = 0;
 	}
+	kfree(vpd);
 
 	/* Save information as VPD data */
 	phba->vpd.rev.biuRev = mqe->un.read_rev.first_hw_rev;
@@ -4375,7 +4828,7 @@ lpfc_sli4_hba_setup(struct lpfc_hba *phba)
 	rc = lpfc_sli_issue_mbox(phba, mboxq, MBX_POLL);
 	if (unlikely(rc)) {
 		rc = -EIO;
-		goto out_free_vpd;
+		goto out_free_mbox;
 	}
 
 	/*
@@ -4387,7 +4840,10 @@ lpfc_sli4_hba_setup(struct lpfc_hba *phba)
 				"0378 No support for fcpi mode.\n");
 		ftr_rsp++;
 	}
-
+	if (bf_get(lpfc_mbx_rq_ftr_rsp_perfh, &mqe->un.req_ftrs))
+		phba->sli3_options |= LPFC_SLI4_PERFH_ENABLED;
+	else
+		phba->sli3_options &= ~LPFC_SLI4_PERFH_ENABLED;
 	/*
 	 * If the port cannot support the host's requested features
 	 * then turn off the global config parameters to disable the
@@ -4423,7 +4879,7 @@ lpfc_sli4_hba_setup(struct lpfc_hba *phba)
 	if (rc) {
 		phba->link_state = LPFC_HBA_ERROR;
 		rc = -ENOMEM;
-		goto out_free_vpd;
+		goto out_free_mbox;
 	}
 
 	mboxq->vport = vport;
@@ -4448,7 +4904,7 @@ lpfc_sli4_hba_setup(struct lpfc_hba *phba)
 				rc, bf_get(lpfc_mqe_status, mqe));
 		phba->link_state = LPFC_HBA_ERROR;
 		rc = -EIO;
-		goto out_free_vpd;
+		goto out_free_mbox;
 	}
 
 	if (phba->cfg_soft_wwnn)
@@ -4473,7 +4929,7 @@ lpfc_sli4_hba_setup(struct lpfc_hba *phba)
 				"0582 Error %d during sgl post operation\n",
 					rc);
 		rc = -ENODEV;
-		goto out_free_vpd;
+		goto out_free_mbox;
 	}
 
 	/* Register SCSI SGL pool to the device */
@@ -4485,7 +4941,7 @@ lpfc_sli4_hba_setup(struct lpfc_hba *phba)
 		/* Some Scsi buffers were moved to the abort scsi list */
 		/* A pci function reset will repost them */
 		rc = -ENODEV;
-		goto out_free_vpd;
+		goto out_free_mbox;
 	}
 
 	/* Post the rpi header region to the device. */
@@ -4495,7 +4951,7 @@ lpfc_sli4_hba_setup(struct lpfc_hba *phba)
 				"0393 Error %d during rpi post operation\n",
 				rc);
 		rc = -ENODEV;
-		goto out_free_vpd;
+		goto out_free_mbox;
 	}
 
 	/* Set up all the queues to the device */
@@ -4537,33 +4993,52 @@ lpfc_sli4_hba_setup(struct lpfc_hba *phba)
 	/* Start error attention (ERATT) polling timer */
 	mod_timer(&phba->eratt_poll, jiffies + HZ * LPFC_ERATT_POLL_INTERVAL);
 
+	/* Enable PCIe device Advanced Error Reporting (AER) if configured */
+	if (phba->cfg_aer_support == 1 && !(phba->hba_flag & HBA_AER_ENABLED)) {
+		rc = pci_enable_pcie_error_reporting(phba->pcidev);
+		if (!rc) {
+			lpfc_printf_log(phba, KERN_INFO, LOG_INIT,
+					"2829 This device supports "
+					"Advanced Error Reporting (AER)\n");
+			spin_lock_irq(&phba->hbalock);
+			phba->hba_flag |= HBA_AER_ENABLED;
+			spin_unlock_irq(&phba->hbalock);
+		} else {
+			lpfc_printf_log(phba, KERN_INFO, LOG_INIT,
+					"2830 This device does not support "
+					"Advanced Error Reporting (AER)\n");
+			phba->cfg_aer_support = 0;
+		}
+	}
+
+	if (!(phba->hba_flag & HBA_FCOE_MODE)) {
+		/*
+		 * The FC Port needs to register FCFI (index 0)
+		 */
+		lpfc_reg_fcfi(phba, mboxq);
+		mboxq->vport = phba->pport;
+		rc = lpfc_sli_issue_mbox(phba, mboxq, MBX_POLL);
+		if (rc == MBX_SUCCESS)
+			rc = 0;
+		else
+			goto out_unset_queue;
+	}
 	/*
 	 * The port is ready, set the host's link state to LINK_DOWN
 	 * in preparation for link interrupts.
 	 */
-	lpfc_init_link(phba, mboxq, phba->cfg_topology, phba->cfg_link_speed);
-	mboxq->mbox_cmpl = lpfc_sli_def_mbox_cmpl;
-	lpfc_set_loopback_flag(phba);
-	/* Change driver state to LPFC_LINK_DOWN right before init link */
 	spin_lock_irq(&phba->hbalock);
 	phba->link_state = LPFC_LINK_DOWN;
 	spin_unlock_irq(&phba->hbalock);
-	rc = lpfc_sli_issue_mbox(phba, mboxq, MBX_NOWAIT);
-	if (unlikely(rc != MBX_NOT_FINISHED)) {
-		kfree(vpd);
-		return 0;
-	} else
-		rc = -EIO;
-
+	if (phba->cfg_suppress_link_up == LPFC_INITIALIZE_LINK)
+		rc = phba->lpfc_hba_init_link(phba, MBX_NOWAIT);
+out_unset_queue:
 	/* Unset all the queues set up in this routine when error out */
 	if (rc)
 		lpfc_sli4_queue_unset(phba);
-
 out_stop_timers:
 	if (rc)
 		lpfc_stop_hba_timers(phba);
-out_free_vpd:
-	kfree(vpd);
 out_free_mbox:
 	mempool_free(mboxq, phba->mbox_mem_pool);
 	return rc;
@@ -4642,7 +5117,7 @@ lpfc_mbox_timeout_handler(struct lpfc_hba *phba)
 
 	/* Setting state unknown so lpfc_sli_abort_iocb_ring
 	 * would get IOCB_ERROR from lpfc_sli_issue_iocb, allowing
-	 * it to fail all oustanding SCSI IO.
+	 * it to fail all outstanding SCSI IO.
 	 */
 	spin_lock_irq(&phba->pport->work_port_lock);
 	phba->pport->work_port_events &= ~WORKER_MBOX_TMO;
@@ -4695,7 +5170,7 @@ lpfc_sli_issue_mbox_s3(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmbox,
 	MAILBOX_t *mb;
 	struct lpfc_sli *psli = &phba->sli;
 	uint32_t status, evtctr;
-	uint32_t ha_copy;
+	uint32_t ha_copy, hc_copy;
 	int i;
 	unsigned long timeout;
 	unsigned long drvr_flag = 0;
@@ -4761,15 +5236,17 @@ lpfc_sli_issue_mbox_s3(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmbox,
 		goto out_not_finished;
 	}
 
-	if (mb->mbxCommand != MBX_KILL_BOARD && flag & MBX_NOWAIT &&
-	    !(readl(phba->HCregaddr) & HC_MBINT_ENA)) {
-		spin_unlock_irqrestore(&phba->hbalock, drvr_flag);
-		lpfc_printf_log(phba, KERN_ERR, LOG_MBOX | LOG_SLI,
+	if (mb->mbxCommand != MBX_KILL_BOARD && flag & MBX_NOWAIT) {
+		if (lpfc_readl(phba->HCregaddr, &hc_copy) ||
+			!(hc_copy & HC_MBINT_ENA)) {
+			spin_unlock_irqrestore(&phba->hbalock, drvr_flag);
+			lpfc_printf_log(phba, KERN_ERR, LOG_MBOX | LOG_SLI,
 				"(%d):2528 Mailbox command x%x cannot "
 				"issue Data: x%x x%x\n",
 				pmbox->vport ? pmbox->vport->vpi : 0,
 				pmbox->u.mb.mbxCommand, psli->sli_flag, flag);
-		goto out_not_finished;
+			goto out_not_finished;
+		}
 	}
 
 	if (psli->sli_flag & LPFC_SLI_MBOX_ACTIVE) {
@@ -4891,9 +5368,34 @@ lpfc_sli_issue_mbox_s3(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmbox,
 	mb->mbxOwner = OWN_CHIP;
 
 	if (psli->sli_flag & LPFC_SLI_ACTIVE) {
-		/* First copy command data to host SLIM area */
+		/* Populate mbox extension offset word. */
+		if (pmbox->in_ext_byte_len || pmbox->out_ext_byte_len) {
+			*(((uint32_t *)mb) + pmbox->mbox_offset_word)
+				= (uint8_t *)phba->mbox_ext
+				  - (uint8_t *)phba->mbox;
+		}
+
+		/* Copy the mailbox extension data */
+		if (pmbox->in_ext_byte_len && pmbox->context2) {
+			lpfc_sli_pcimem_bcopy(pmbox->context2,
+				(uint8_t *)phba->mbox_ext,
+				pmbox->in_ext_byte_len);
+		}
+		/* Copy command data to host SLIM area */
 		lpfc_sli_pcimem_bcopy(mb, phba->mbox, MAILBOX_CMD_SIZE);
 	} else {
+		/* Populate mbox extension offset word. */
+		if (pmbox->in_ext_byte_len || pmbox->out_ext_byte_len)
+			*(((uint32_t *)mb) + pmbox->mbox_offset_word)
+				= MAILBOX_HBA_EXT_OFFSET;
+
+		/* Copy the mailbox extension data */
+		if (pmbox->in_ext_byte_len && pmbox->context2) {
+			lpfc_memcpy_to_slim(phba->MBslimaddr +
+				MAILBOX_HBA_EXT_OFFSET,
+				pmbox->context2, pmbox->in_ext_byte_len);
+
+		}
 		if (mb->mbxCommand == MBX_CONFIG_PORT) {
 			/* copy command data into host mbox for cmpl */
 			lpfc_sli_pcimem_bcopy(mb, phba->mbox, MAILBOX_CMD_SIZE);
@@ -4942,11 +5444,19 @@ lpfc_sli_issue_mbox_s3(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmbox,
 			word0 = le32_to_cpu(word0);
 		} else {
 			/* First read mbox status word */
-			word0 = readl(phba->MBslimaddr);
+			if (lpfc_readl(phba->MBslimaddr, &word0)) {
+				spin_unlock_irqrestore(&phba->hbalock,
+						       drvr_flag);
+				goto out_not_finished;
+			}
 		}
 
 		/* Read the HBA Host Attention Register */
-		ha_copy = readl(phba->HAregaddr);
+		if (lpfc_readl(phba->HAregaddr, &ha_copy)) {
+			spin_unlock_irqrestore(&phba->hbalock,
+						       drvr_flag);
+			goto out_not_finished;
+		}
 		timeout = msecs_to_jiffies(lpfc_mbox_tmo_val(phba,
 							     mb->mbxCommand) *
 					   1000) + jiffies;
@@ -4997,21 +5507,32 @@ lpfc_sli_issue_mbox_s3(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmbox,
 				word0 = readl(phba->MBslimaddr);
 			}
 			/* Read the HBA Host Attention Register */
-			ha_copy = readl(phba->HAregaddr);
+			if (lpfc_readl(phba->HAregaddr, &ha_copy)) {
+				spin_unlock_irqrestore(&phba->hbalock,
+						       drvr_flag);
+				goto out_not_finished;
+			}
 		}
 
 		if (psli->sli_flag & LPFC_SLI_ACTIVE) {
 			/* copy results back to user */
 			lpfc_sli_pcimem_bcopy(phba->mbox, mb, MAILBOX_CMD_SIZE);
+			/* Copy the mailbox extension data */
+			if (pmbox->out_ext_byte_len && pmbox->context2) {
+				lpfc_sli_pcimem_bcopy(phba->mbox_ext,
+						      pmbox->context2,
+						      pmbox->out_ext_byte_len);
+			}
 		} else {
 			/* First copy command data */
 			lpfc_memcpy_from_slim(mb, phba->MBslimaddr,
 							MAILBOX_CMD_SIZE);
-			if ((mb->mbxCommand == MBX_DUMP_MEMORY) &&
-				pmbox->context2) {
-				lpfc_memcpy_from_slim((void *)pmbox->context2,
-				      phba->MBslimaddr + DMP_RSP_OFFSET,
-						      mb->un.varDmp.word_cnt);
+			/* Copy the mailbox extension data */
+			if (pmbox->out_ext_byte_len && pmbox->context2) {
+				lpfc_memcpy_from_slim(pmbox->context2,
+					phba->MBslimaddr +
+					MAILBOX_HBA_EXT_OFFSET,
+					pmbox->out_ext_byte_len);
 			}
 		}
 
@@ -5231,7 +5752,8 @@ lpfc_sli4_post_sync_mbox(struct lpfc_hba *phba, LPFC_MBOXQ_t *mboxq)
 	if (mcqe_status != MB_CQE_STATUS_SUCCESS) {
 		bf_set(lpfc_mqe_status, mb, LPFC_MBX_ERROR_RANGE | mcqe_status);
 		rc = MBXERR_ERROR;
-	}
+	} else
+		lpfc_sli4_swap_str(phba, mboxq);
 
 	lpfc_printf_log(phba, KERN_INFO, LOG_MBOX | LOG_SLI,
 			"(%d):0356 Mailbox cmd x%x (x%x) Status x%x "
@@ -5509,7 +6031,7 @@ lpfc_sli_issue_mbox(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmbox, uint32_t flag)
 }
 
 /**
- * lpfc_mbox_api_table_setup - Set up mbox api fucntion jump table
+ * lpfc_mbox_api_table_setup - Set up mbox api function jump table
  * @phba: The hba struct for which this call is being executed.
  * @dev_grp: The HBA PCI-Device group number.
  *
@@ -5558,7 +6080,7 @@ lpfc_mbox_api_table_setup(struct lpfc_hba *phba, uint8_t dev_grp)
  * iocb to the txq when SLI layer cannot submit the command iocb
  * to the ring.
  **/
-static void
+void
 __lpfc_sli_ringtx_put(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 		    struct lpfc_iocbq *piocb)
 {
@@ -5759,6 +6281,8 @@ lpfc_sli4_bpl2sgl(struct lpfc_hba *phba, struct lpfc_iocbq *piocbq,
 	IOCB_t *icmd;
 	int numBdes = 0;
 	int i = 0;
+	uint32_t offset = 0; /* accumulated offset in the sg request list */
+	int inbound = 0; /* number of sg reply entries inbound from firmware */
 
 	if (!piocbq || !sglq)
 		return xritag;
@@ -5787,12 +6311,26 @@ lpfc_sli4_bpl2sgl(struct lpfc_hba *phba, struct lpfc_iocbq *piocbq,
 				bf_set(lpfc_sli4_sge_last, sgl, 1);
 			else
 				bf_set(lpfc_sli4_sge_last, sgl, 0);
-			sgl->word2 = cpu_to_le32(sgl->word2);
 			/* swap the size field back to the cpu so we
 			 * can assign it to the sgl.
 			 */
 			bde.tus.w = le32_to_cpu(bpl->tus.w);
 			sgl->sge_len = cpu_to_le32(bde.tus.f.bdeSize);
+			/* The offsets in the sgl need to be accumulated
+			 * separately for the request and reply lists.
+			 * The request is always first, the reply follows.
+			 */
+			if (piocbq->iocb.ulpCommand == CMD_GEN_REQUEST64_CR) {
+				/* add up the reply sg entries */
+				if (bpl->tus.f.bdeFlags == BUFF_TYPE_BDE_64I)
+					inbound++;
+				/* first inbound? reset the offset */
+				if (inbound == 1)
+					offset = 0;
+				bf_set(lpfc_sli4_sge_offset, sgl, offset);
+				offset += bde.tus.f.bdeSize;
+			}
+			sgl->word2 = cpu_to_le32(sgl->word2);
 			bpl++;
 			sgl++;
 		}
@@ -5817,7 +6355,7 @@ lpfc_sli4_bpl2sgl(struct lpfc_hba *phba, struct lpfc_iocbq *piocbq,
  * lpfc_sli4_scmd_to_wqidx_distr - scsi command to SLI4 WQ index distribution
  * @phba: Pointer to HBA context object.
  *
- * This routine performs a round robin SCSI command to SLI4 FCP WQ index
+ * This routine performs a roundrobin SCSI command to SLI4 FCP WQ index
  * distribution.  This is called by __lpfc_sli_issue_iocb_s4() with the hbalock
  * held.
  *
@@ -5858,8 +6396,10 @@ lpfc_sli4_iocb2wqe(struct lpfc_hba *phba, struct lpfc_iocbq *iocbq,
 	uint8_t command_type = ELS_COMMAND_NON_FIP;
 	uint8_t cmnd;
 	uint16_t xritag;
+	uint16_t abrt_iotag;
+	struct lpfc_iocbq *abrtiocbq;
 	struct ulp_bde64 *bpl = NULL;
-	uint32_t els_id = ELS_ID_DEFAULT;
+	uint32_t els_id = LPFC_ELS_ID_DEFAULT;
 	int numBdes, i;
 	struct ulp_bde64 bde;
 
@@ -5876,7 +6416,7 @@ lpfc_sli4_iocb2wqe(struct lpfc_hba *phba, struct lpfc_iocbq *iocbq,
 	memcpy(wqe, &iocbq->iocb, sizeof(union lpfc_wqe));
 	abort_tag = (uint32_t) iocbq->iotag;
 	xritag = iocbq->sli4_xritag;
-	wqe->words[7] = 0; /* The ct field has moved so reset */
+	wqe->generic.wqe_com.word7 = 0; /* The ct field has moved so reset */
 	/* words0-2 bpl convert bde */
 	if (iocbq->iocb.un.genreq64.bdl.bdeFlags == BUFF_TYPE_BLP_64) {
 		numBdes = iocbq->iocb.un.genreq64.bdl.bdeSize /
@@ -5922,114 +6462,129 @@ lpfc_sli4_iocb2wqe(struct lpfc_hba *phba, struct lpfc_iocbq *iocbq,
 		bf_set(els_req64_vf, &wqe->els_req, 0);
 		/* And a VFID for word 12 */
 		bf_set(els_req64_vfid, &wqe->els_req, 0);
-		/*
-		 * Set ct field to 3, indicates that the context_tag field
-		 * contains the FCFI and remote N_Port_ID is
-		 * in word 5.
-		 */
-
 		ct = ((iocbq->iocb.ulpCt_h << 1) | iocbq->iocb.ulpCt_l);
-		bf_set(lpfc_wqe_gen_context, &wqe->generic,
-				iocbq->iocb.ulpContext);
-
-		bf_set(lpfc_wqe_gen_ct, &wqe->generic, ct);
-		bf_set(lpfc_wqe_gen_pu, &wqe->generic, 0);
+		bf_set(wqe_ctxt_tag, &wqe->els_req.wqe_com,
+		       iocbq->iocb.ulpContext);
+		bf_set(wqe_ct, &wqe->els_req.wqe_com, ct);
+		bf_set(wqe_pu, &wqe->els_req.wqe_com, 0);
 		/* CCP CCPE PV PRI in word10 were set in the memcpy */
-
 		if (command_type == ELS_COMMAND_FIP) {
 			els_id = ((iocbq->iocb_flag & LPFC_FIP_ELS_ID_MASK)
 					>> LPFC_FIP_ELS_ID_SHIFT);
 		}
-		bf_set(lpfc_wqe_gen_els_id, &wqe->generic, els_id);
-
+		bf_set(wqe_els_id, &wqe->els_req.wqe_com, els_id);
+		bf_set(wqe_dbde, &wqe->els_req.wqe_com, 1);
+		bf_set(wqe_iod, &wqe->els_req.wqe_com, LPFC_WQE_IOD_READ);
+		bf_set(wqe_qosd, &wqe->els_req.wqe_com, 1);
+		bf_set(wqe_lenloc, &wqe->els_req.wqe_com, LPFC_WQE_LENLOC_NONE);
+		bf_set(wqe_ebde_cnt, &wqe->els_req.wqe_com, 0);
 	break;
 	case CMD_XMIT_SEQUENCE64_CX:
-		bf_set(lpfc_wqe_gen_context, &wqe->generic,
-					iocbq->iocb.un.ulpWord[3]);
-		wqe->generic.word3 = 0;
-		bf_set(wqe_rcvoxid, &wqe->generic, iocbq->iocb.ulpContext);
+		bf_set(wqe_ctxt_tag, &wqe->xmit_sequence.wqe_com,
+		       iocbq->iocb.un.ulpWord[3]);
+		bf_set(wqe_rcvoxid, &wqe->xmit_sequence.wqe_com,
+		       iocbq->iocb.ulpContext);
 		/* The entire sequence is transmitted for this IOCB */
 		xmit_len = total_len;
 		cmnd = CMD_XMIT_SEQUENCE64_CR;
 	case CMD_XMIT_SEQUENCE64_CR:
-		/* word3 iocb=io_tag32 wqe=payload_offset */
-		/* payload offset used for multilpe outstanding
-		 * sequences on the same exchange
-		 */
-		wqe->words[3] = 0;
+		/* word3 iocb=io_tag32 wqe=reserved */
+		wqe->xmit_sequence.rsvd3 = 0;
 		/* word4 relative_offset memcpy */
 		/* word5 r_ctl/df_ctl memcpy */
-		bf_set(lpfc_wqe_gen_pu, &wqe->generic, 0);
+		bf_set(wqe_pu, &wqe->xmit_sequence.wqe_com, 0);
+		bf_set(wqe_dbde, &wqe->xmit_sequence.wqe_com, 1);
+		bf_set(wqe_iod, &wqe->xmit_sequence.wqe_com,
+		       LPFC_WQE_IOD_WRITE);
+		bf_set(wqe_lenloc, &wqe->xmit_sequence.wqe_com,
+		       LPFC_WQE_LENLOC_WORD12);
+		bf_set(wqe_ebde_cnt, &wqe->xmit_sequence.wqe_com, 0);
 		wqe->xmit_sequence.xmit_len = xmit_len;
 		command_type = OTHER_COMMAND;
 	break;
 	case CMD_XMIT_BCAST64_CN:
-		/* word3 iocb=iotag32 wqe=payload_len */
-		wqe->words[3] = 0; /* no definition for this in wqe */
+		/* word3 iocb=iotag32 wqe=seq_payload_len */
+		wqe->xmit_bcast64.seq_payload_len = xmit_len;
 		/* word4 iocb=rsvd wqe=rsvd */
 		/* word5 iocb=rctl/type/df_ctl wqe=rctl/type/df_ctl memcpy */
 		/* word6 iocb=ctxt_tag/io_tag wqe=ctxt_tag/xri */
-		bf_set(lpfc_wqe_gen_ct, &wqe->generic,
+		bf_set(wqe_ct, &wqe->xmit_bcast64.wqe_com,
 			((iocbq->iocb.ulpCt_h << 1) | iocbq->iocb.ulpCt_l));
+		bf_set(wqe_dbde, &wqe->xmit_bcast64.wqe_com, 1);
+		bf_set(wqe_iod, &wqe->xmit_bcast64.wqe_com, LPFC_WQE_IOD_WRITE);
+		bf_set(wqe_lenloc, &wqe->xmit_bcast64.wqe_com,
+		       LPFC_WQE_LENLOC_WORD3);
+		bf_set(wqe_ebde_cnt, &wqe->xmit_bcast64.wqe_com, 0);
 	break;
 	case CMD_FCP_IWRITE64_CR:
 		command_type = FCP_COMMAND_DATA_OUT;
-		/* The struct for wqe fcp_iwrite has 3 fields that are somewhat
-		 * confusing.
-		 * word3 is payload_len: byte offset to the sgl entry for the
-		 * fcp_command.
-		 * word4 is total xfer len, same as the IOCB->ulpParameter.
-		 * word5 is initial xfer len 0 = wait for xfer-ready
-		 */
-
-		/* Always wait for xfer-ready before sending data */
-		wqe->fcp_iwrite.initial_xfer_len = 0;
-		/* word 4 (xfer length) should have been set on the memcpy */
-
-	/* allow write to fall through to read */
-	case CMD_FCP_IREAD64_CR:
-		/* FCP_CMD is always the 1st sgl entry */
-		wqe->fcp_iread.payload_len =
+		/* word3 iocb=iotag wqe=payload_offset_len */
+		/* Add the FCP_CMD and FCP_RSP sizes to get the offset */
+		wqe->fcp_iwrite.payload_offset_len =
 			xmit_len + sizeof(struct fcp_rsp);
-
-		/* word 4 (xfer length) should have been set on the memcpy */
-
-		bf_set(lpfc_wqe_gen_erp, &wqe->generic,
-			iocbq->iocb.ulpFCP2Rcvy);
-		bf_set(lpfc_wqe_gen_lnk, &wqe->generic, iocbq->iocb.ulpXS);
-		/* The XC bit and the XS bit are similar. The driver never
-		 * tracked whether or not the exchange was previouslly open.
-		 * XC = Exchange create, 0 is create. 1 is already open.
-		 * XS = link cmd: 1 do not close the exchange after command.
-		 * XS = 0 close exchange when command completes.
-		 * The only time we would not set the XC bit is when the XS bit
-		 * is set and we are sending our 2nd or greater command on
-		 * this exchange.
-		 */
+		/* word4 iocb=parameter wqe=total_xfer_length memcpy */
+		/* word5 iocb=initial_xfer_len wqe=initial_xfer_len memcpy */
+		bf_set(wqe_erp, &wqe->fcp_iwrite.wqe_com,
+		       iocbq->iocb.ulpFCP2Rcvy);
+		bf_set(wqe_lnk, &wqe->fcp_iwrite.wqe_com, iocbq->iocb.ulpXS);
+		/* Always open the exchange */
+		bf_set(wqe_xc, &wqe->fcp_iwrite.wqe_com, 0);
+		bf_set(wqe_dbde, &wqe->fcp_iwrite.wqe_com, 1);
+		bf_set(wqe_iod, &wqe->fcp_iwrite.wqe_com, LPFC_WQE_IOD_WRITE);
+		bf_set(wqe_lenloc, &wqe->fcp_iwrite.wqe_com,
+		       LPFC_WQE_LENLOC_WORD4);
+		bf_set(wqe_ebde_cnt, &wqe->fcp_iwrite.wqe_com, 0);
+		bf_set(wqe_pu, &wqe->fcp_iwrite.wqe_com, iocbq->iocb.ulpPU);
+	break;
+	case CMD_FCP_IREAD64_CR:
+		/* word3 iocb=iotag wqe=payload_offset_len */
+		/* Add the FCP_CMD and FCP_RSP sizes to get the offset */
+		wqe->fcp_iread.payload_offset_len =
+			xmit_len + sizeof(struct fcp_rsp);
+		/* word4 iocb=parameter wqe=total_xfer_length memcpy */
+		/* word5 iocb=initial_xfer_len wqe=initial_xfer_len memcpy */
+		bf_set(wqe_erp, &wqe->fcp_iread.wqe_com,
+		       iocbq->iocb.ulpFCP2Rcvy);
+		bf_set(wqe_lnk, &wqe->fcp_iread.wqe_com, iocbq->iocb.ulpXS);
 		/* Always open the exchange */
 		bf_set(wqe_xc, &wqe->fcp_iread.wqe_com, 0);
-
-		wqe->words[10] &= 0xffff0000; /* zero out ebde count */
-		bf_set(lpfc_wqe_gen_pu, &wqe->generic, iocbq->iocb.ulpPU);
-		break;
+		bf_set(wqe_dbde, &wqe->fcp_iread.wqe_com, 1);
+		bf_set(wqe_iod, &wqe->fcp_iread.wqe_com, LPFC_WQE_IOD_READ);
+		bf_set(wqe_lenloc, &wqe->fcp_iread.wqe_com,
+		       LPFC_WQE_LENLOC_WORD4);
+		bf_set(wqe_ebde_cnt, &wqe->fcp_iread.wqe_com, 0);
+		bf_set(wqe_pu, &wqe->fcp_iread.wqe_com, iocbq->iocb.ulpPU);
+	break;
 	case CMD_FCP_ICMND64_CR:
+		/* word3 iocb=IO_TAG wqe=reserved */
+		wqe->fcp_icmd.rsrvd3 = 0;
+		bf_set(wqe_pu, &wqe->fcp_icmd.wqe_com, 0);
 		/* Always open the exchange */
-		bf_set(wqe_xc, &wqe->fcp_iread.wqe_com, 0);
-
-		wqe->words[4] = 0;
-		wqe->words[10] &= 0xffff0000; /* zero out ebde count */
-		bf_set(lpfc_wqe_gen_pu, &wqe->generic, 0);
+		bf_set(wqe_xc, &wqe->fcp_icmd.wqe_com, 0);
+		bf_set(wqe_dbde, &wqe->fcp_icmd.wqe_com, 1);
+		bf_set(wqe_iod, &wqe->fcp_icmd.wqe_com, LPFC_WQE_IOD_WRITE);
+		bf_set(wqe_qosd, &wqe->fcp_icmd.wqe_com, 1);
+		bf_set(wqe_lenloc, &wqe->fcp_icmd.wqe_com,
+		       LPFC_WQE_LENLOC_NONE);
+		bf_set(wqe_ebde_cnt, &wqe->fcp_icmd.wqe_com, 0);
 	break;
 	case CMD_GEN_REQUEST64_CR:
-		/* word3 command length is described as byte offset to the
-		 * rsp_data. Would always be 16, sizeof(struct sli4_sge)
-		 * sgl[0] = cmnd
-		 * sgl[1] = rsp.
-		 *
+		/* For this command calculate the xmit length of the
+		 * request bde.
 		 */
-		wqe->gen_req.command_len = xmit_len;
-		/* Word4 parameter  copied in the memcpy */
-		/* Word5 [rctl, type, df_ctl, la] copied in memcpy */
+		xmit_len = 0;
+		numBdes = iocbq->iocb.un.genreq64.bdl.bdeSize /
+			sizeof(struct ulp_bde64);
+		for (i = 0; i < numBdes; i++) {
+			bde.tus.w = le32_to_cpu(bpl[i].tus.w);
+			if (bde.tus.f.bdeFlags != BUFF_TYPE_BDE_64)
+				break;
+			xmit_len += bde.tus.f.bdeSize;
+		}
+		/* word3 iocb=IO_TAG wqe=request_payload_len */
+		wqe->gen_req.request_payload_len = xmit_len;
+		/* word4 iocb=parameter wqe=relative_offset memcpy */
+		/* word5 [rctl, type, df_ctl, la] copied in memcpy */
 		/* word6 context tag copied in memcpy */
 		if (iocbq->iocb.ulpCt_h  || iocbq->iocb.ulpCt_l) {
 			ct = ((iocbq->iocb.ulpCt_h << 1) | iocbq->iocb.ulpCt_l);
@@ -6038,31 +6593,39 @@ lpfc_sli4_iocb2wqe(struct lpfc_hba *phba, struct lpfc_iocbq *iocbq,
 				ct, iocbq->iocb.ulpCommand);
 			return IOCB_ERROR;
 		}
-		bf_set(lpfc_wqe_gen_ct, &wqe->generic, 0);
-		bf_set(wqe_tmo, &wqe->gen_req.wqe_com,
-			iocbq->iocb.ulpTimeout);
-
-		bf_set(lpfc_wqe_gen_pu, &wqe->generic, iocbq->iocb.ulpPU);
+		bf_set(wqe_ct, &wqe->gen_req.wqe_com, 0);
+		bf_set(wqe_tmo, &wqe->gen_req.wqe_com, iocbq->iocb.ulpTimeout);
+		bf_set(wqe_pu, &wqe->gen_req.wqe_com, iocbq->iocb.ulpPU);
+		bf_set(wqe_dbde, &wqe->gen_req.wqe_com, 1);
+		bf_set(wqe_iod, &wqe->gen_req.wqe_com, LPFC_WQE_IOD_READ);
+		bf_set(wqe_qosd, &wqe->gen_req.wqe_com, 1);
+		bf_set(wqe_lenloc, &wqe->gen_req.wqe_com, LPFC_WQE_LENLOC_NONE);
+		bf_set(wqe_ebde_cnt, &wqe->gen_req.wqe_com, 0);
 		command_type = OTHER_COMMAND;
 	break;
 	case CMD_XMIT_ELS_RSP64_CX:
 		/* words0-2 BDE memcpy */
-		/* word3 iocb=iotag32 wqe=rsvd */
-		wqe->words[3] = 0;
+		/* word3 iocb=iotag32 wqe=response_payload_len */
+		wqe->xmit_els_rsp.response_payload_len = xmit_len;
 		/* word4 iocb=did wge=rsvd. */
-		wqe->words[4] = 0;
+		wqe->xmit_els_rsp.rsvd4 = 0;
 		/* word5 iocb=rsvd wge=did */
 		bf_set(wqe_els_did, &wqe->xmit_els_rsp.wqe_dest,
 			 iocbq->iocb.un.elsreq64.remoteID);
-
-		bf_set(lpfc_wqe_gen_ct, &wqe->generic,
-			((iocbq->iocb.ulpCt_h << 1) | iocbq->iocb.ulpCt_l));
-
-		bf_set(lpfc_wqe_gen_pu, &wqe->generic, iocbq->iocb.ulpPU);
-		bf_set(wqe_rcvoxid, &wqe->generic, iocbq->iocb.ulpContext);
+		bf_set(wqe_ct, &wqe->xmit_els_rsp.wqe_com,
+		       ((iocbq->iocb.ulpCt_h << 1) | iocbq->iocb.ulpCt_l));
+		bf_set(wqe_pu, &wqe->xmit_els_rsp.wqe_com, iocbq->iocb.ulpPU);
+		bf_set(wqe_rcvoxid, &wqe->xmit_els_rsp.wqe_com,
+		       iocbq->iocb.ulpContext);
 		if (!iocbq->iocb.ulpCt_h && iocbq->iocb.ulpCt_l)
-			bf_set(lpfc_wqe_gen_context, &wqe->generic,
+			bf_set(wqe_ctxt_tag, &wqe->xmit_els_rsp.wqe_com,
 			       iocbq->vport->vpi + phba->vpi_base);
+		bf_set(wqe_dbde, &wqe->xmit_els_rsp.wqe_com, 1);
+		bf_set(wqe_iod, &wqe->xmit_els_rsp.wqe_com, LPFC_WQE_IOD_WRITE);
+		bf_set(wqe_qosd, &wqe->xmit_els_rsp.wqe_com, 1);
+		bf_set(wqe_lenloc, &wqe->xmit_els_rsp.wqe_com,
+		       LPFC_WQE_LENLOC_WORD3);
+		bf_set(wqe_ebde_cnt, &wqe->xmit_els_rsp.wqe_com, 0);
 		command_type = OTHER_COMMAND;
 	break;
 	case CMD_CLOSE_XRI_CN:
@@ -6070,38 +6633,50 @@ lpfc_sli4_iocb2wqe(struct lpfc_hba *phba, struct lpfc_iocbq *iocbq,
 	case CMD_ABORT_XRI_CX:
 		/* words 0-2 memcpy should be 0 rserved */
 		/* port will send abts */
-		if (iocbq->iocb.ulpCommand == CMD_CLOSE_XRI_CN)
+		abrt_iotag = iocbq->iocb.un.acxri.abortContextTag;
+		if (abrt_iotag != 0 && abrt_iotag <= phba->sli.last_iotag) {
+			abrtiocbq = phba->sli.iocbq_lookup[abrt_iotag];
+			fip = abrtiocbq->iocb_flag & LPFC_FIP_ELS_ID_MASK;
+		} else
+			fip = 0;
+
+		if ((iocbq->iocb.ulpCommand == CMD_CLOSE_XRI_CN) || fip)
 			/*
-			 * The link is down so the fw does not need to send abts
+			 * The link is down, or the command was ELS_FIP
+			 * so the fw does not need to send abts
 			 * on the wire.
 			 */
 			bf_set(abort_cmd_ia, &wqe->abort_cmd, 1);
 		else
 			bf_set(abort_cmd_ia, &wqe->abort_cmd, 0);
 		bf_set(abort_cmd_criteria, &wqe->abort_cmd, T_XRI_TAG);
-		wqe->words[5] = 0;
-		bf_set(lpfc_wqe_gen_ct, &wqe->generic,
+		/* word5 iocb=CONTEXT_TAG|IO_TAG wqe=reserved */
+		wqe->abort_cmd.rsrvd5 = 0;
+		bf_set(wqe_ct, &wqe->abort_cmd.wqe_com,
 			((iocbq->iocb.ulpCt_h << 1) | iocbq->iocb.ulpCt_l));
 		abort_tag = iocbq->iocb.un.acxri.abortIoTag;
 		/*
 		 * The abort handler will send us CMD_ABORT_XRI_CN or
 		 * CMD_CLOSE_XRI_CN and the fw only accepts CMD_ABORT_XRI_CX
 		 */
-		bf_set(lpfc_wqe_gen_command, &wqe->generic, CMD_ABORT_XRI_CX);
+		bf_set(wqe_cmnd, &wqe->abort_cmd.wqe_com, CMD_ABORT_XRI_CX);
+		bf_set(wqe_qosd, &wqe->abort_cmd.wqe_com, 1);
+		bf_set(wqe_lenloc, &wqe->abort_cmd.wqe_com,
+		       LPFC_WQE_LENLOC_NONE);
 		cmnd = CMD_ABORT_XRI_CX;
 		command_type = OTHER_COMMAND;
 		xritag = 0;
 	break;
 	case CMD_XMIT_BLS_RSP64_CX:
-		/* As BLS ABTS-ACC WQE is very different from other WQEs,
+		/* As BLS ABTS RSP WQE is very different from other WQEs,
 		 * we re-construct this WQE here based on information in
 		 * iocbq from scratch.
 		 */
 		memset(wqe, 0, sizeof(union lpfc_wqe));
 		/* OX_ID is invariable to who sent ABTS to CT exchange */
 		bf_set(xmit_bls_rsp64_oxid, &wqe->xmit_bls_rsp,
-		       bf_get(lpfc_abts_oxid, &iocbq->iocb.un.bls_acc));
-		if (bf_get(lpfc_abts_orig, &iocbq->iocb.un.bls_acc) ==
+		       bf_get(lpfc_abts_oxid, &iocbq->iocb.un.bls_rsp));
+		if (bf_get(lpfc_abts_orig, &iocbq->iocb.un.bls_rsp) ==
 		    LPFC_ABTS_UNSOL_INT) {
 			/* ABTS sent by initiator to CT exchange, the
 			 * RX_ID field will be filled with the newly
@@ -6115,24 +6690,29 @@ lpfc_sli4_iocb2wqe(struct lpfc_hba *phba, struct lpfc_iocbq *iocbq,
 			 * RX_ID from ABTS.
 			 */
 			bf_set(xmit_bls_rsp64_rxid, &wqe->xmit_bls_rsp,
-			       bf_get(lpfc_abts_rxid, &iocbq->iocb.un.bls_acc));
+			       bf_get(lpfc_abts_rxid, &iocbq->iocb.un.bls_rsp));
 		}
 		bf_set(xmit_bls_rsp64_seqcnthi, &wqe->xmit_bls_rsp, 0xffff);
 		bf_set(wqe_xmit_bls_pt, &wqe->xmit_bls_rsp.wqe_dest, 0x1);
 		bf_set(wqe_ctxt_tag, &wqe->xmit_bls_rsp.wqe_com,
 		       iocbq->iocb.ulpContext);
+		bf_set(wqe_qosd, &wqe->xmit_bls_rsp.wqe_com, 1);
+		bf_set(wqe_lenloc, &wqe->xmit_bls_rsp.wqe_com,
+		       LPFC_WQE_LENLOC_NONE);
 		/* Overwrite the pre-set comnd type with OTHER_COMMAND */
 		command_type = OTHER_COMMAND;
+		if (iocbq->iocb.un.xseq64.w5.hcsw.Rctl == FC_RCTL_BA_RJT) {
+			bf_set(xmit_bls_rsp64_rjt_vspec, &wqe->xmit_bls_rsp,
+			       bf_get(lpfc_vndr_code, &iocbq->iocb.un.bls_rsp));
+			bf_set(xmit_bls_rsp64_rjt_expc, &wqe->xmit_bls_rsp,
+			       bf_get(lpfc_rsn_expln, &iocbq->iocb.un.bls_rsp));
+			bf_set(xmit_bls_rsp64_rjt_rsnc, &wqe->xmit_bls_rsp,
+			       bf_get(lpfc_rsn_code, &iocbq->iocb.un.bls_rsp));
+		}
+
 	break;
 	case CMD_XRI_ABORTED_CX:
 	case CMD_CREATE_XRI_CR: /* Do we expect to use this? */
-		/* words0-2 are all 0's no bde */
-		/* word3 and word4 are rsvrd */
-		wqe->words[3] = 0;
-		wqe->words[4] = 0;
-		/* word5 iocb=rsvd wge=did */
-		/* There is no remote port id in the IOCB? */
-		/* Let this fall through and fail */
 	case CMD_IOCB_FCP_IBIDIR64_CR: /* bidirectional xfer */
 	case CMD_FCP_TSEND64_CX: /* Target mode send xfer-ready */
 	case CMD_FCP_TRSP64_CX: /* Target mode rcv */
@@ -6143,16 +6723,14 @@ lpfc_sli4_iocb2wqe(struct lpfc_hba *phba, struct lpfc_iocbq *iocbq,
 				iocbq->iocb.ulpCommand);
 		return IOCB_ERROR;
 	break;
-
 	}
-	bf_set(lpfc_wqe_gen_xri, &wqe->generic, xritag);
-	bf_set(lpfc_wqe_gen_request_tag, &wqe->generic, iocbq->iotag);
-	wqe->generic.abort_tag = abort_tag;
-	bf_set(lpfc_wqe_gen_cmd_type, &wqe->generic, command_type);
-	bf_set(lpfc_wqe_gen_command, &wqe->generic, cmnd);
-	bf_set(lpfc_wqe_gen_class, &wqe->generic, iocbq->iocb.ulpClass);
-	bf_set(lpfc_wqe_gen_cq_id, &wqe->generic, LPFC_WQE_CQ_ID_DEFAULT);
-
+	bf_set(wqe_xri_tag, &wqe->generic.wqe_com, xritag);
+	bf_set(wqe_reqtag, &wqe->generic.wqe_com, iocbq->iotag);
+	wqe->generic.wqe_com.abort_tag = abort_tag;
+	bf_set(wqe_cmd_type, &wqe->generic.wqe_com, command_type);
+	bf_set(wqe_cmnd, &wqe->generic.wqe_com, cmnd);
+	bf_set(wqe_class, &wqe->generic.wqe_com, iocbq->iocb.ulpClass);
+	bf_set(wqe_cqid, &wqe->generic.wqe_com, LPFC_WQE_CQ_ID_DEFAULT);
 	return 0;
 }
 
@@ -6175,19 +6753,35 @@ __lpfc_sli_issue_iocb_s4(struct lpfc_hba *phba, uint32_t ring_number,
 			 struct lpfc_iocbq *piocb, uint32_t flag)
 {
 	struct lpfc_sglq *sglq;
-	uint16_t xritag;
 	union lpfc_wqe wqe;
 	struct lpfc_sli_ring *pring = &phba->sli.ring[ring_number];
 
 	if (piocb->sli4_xritag == NO_XRI) {
 		if (piocb->iocb.ulpCommand == CMD_ABORT_XRI_CN ||
-		    piocb->iocb.ulpCommand == CMD_CLOSE_XRI_CN)
+		    piocb->iocb.ulpCommand == CMD_CLOSE_XRI_CN ||
+		    piocb->iocb.ulpCommand == CMD_XMIT_BLS_RSP64_CX)
 			sglq = NULL;
 		else {
-			sglq = __lpfc_sli_get_sglq(phba);
-			if (!sglq)
-				return IOCB_ERROR;
-			piocb->sli4_xritag = sglq->sli4_xritag;
+			if (pring->txq_cnt) {
+				if (!(flag & SLI_IOCB_RET_IOCB)) {
+					__lpfc_sli_ringtx_put(phba,
+						pring, piocb);
+					return IOCB_SUCCESS;
+				} else {
+					return IOCB_BUSY;
+				}
+			} else {
+			sglq = __lpfc_sli_get_sglq(phba, piocb);
+				if (!sglq) {
+					if (!(flag & SLI_IOCB_RET_IOCB)) {
+						__lpfc_sli_ringtx_put(phba,
+								pring,
+								piocb);
+						return IOCB_SUCCESS;
+					} else
+						return IOCB_BUSY;
+				}
+			}
 		}
 	} else if (piocb->iocb_flag &  LPFC_IO_FCP) {
 		sglq = NULL; /* These IO's already have an XRI and
@@ -6203,8 +6797,9 @@ __lpfc_sli_issue_iocb_s4(struct lpfc_hba *phba, uint32_t ring_number,
 	}
 
 	if (sglq) {
-		xritag = lpfc_sli4_bpl2sgl(phba, piocb, sglq);
-		if (xritag != sglq->sli4_xritag)
+		piocb->sli4_xritag = sglq->sli4_xritag;
+
+		if (NO_XRI == lpfc_sli4_bpl2sgl(phba, piocb, sglq))
 			return IOCB_ERROR;
 	}
 
@@ -6244,7 +6839,7 @@ __lpfc_sli_issue_iocb_s4(struct lpfc_hba *phba, uint32_t ring_number,
  * 	IOCB_SUCCESS - Success
  * 	IOCB_BUSY - Busy
  **/
-static inline int
+int
 __lpfc_sli_issue_iocb(struct lpfc_hba *phba, uint32_t ring_number,
 		struct lpfc_iocbq *piocb, uint32_t flag)
 {
@@ -6252,7 +6847,7 @@ __lpfc_sli_issue_iocb(struct lpfc_hba *phba, uint32_t ring_number,
 }
 
 /**
- * lpfc_sli_api_table_setup - Set up sli api fucntion jump table
+ * lpfc_sli_api_table_setup - Set up sli api function jump table
  * @phba: The hba struct for which this call is being executed.
  * @dev_grp: The HBA PCI-Device group number.
  *
@@ -6800,37 +7395,6 @@ lpfc_sli_hba_down(struct lpfc_hba *phba)
 }
 
 /**
- * lpfc_sli4_hba_down - PCI function resource cleanup for the SLI4 HBA
- * @phba: Pointer to HBA context object.
- *
- * This function cleans up all queues, iocb, buffers, mailbox commands while
- * shutting down the SLI4 HBA FCoE function. This function is called with no
- * lock held and always returns 1.
- *
- * This function does the following to cleanup driver FCoE function resources:
- * - Free discovery resources for each virtual port
- * - Cleanup any pending fabric iocbs
- * - Iterate through the iocb txq and free each entry in the list.
- * - Free up any buffer posted to the HBA.
- * - Clean up all the queue entries: WQ, RQ, MQ, EQ, CQ, etc.
- * - Free mailbox commands in the mailbox queue.
- **/
-int
-lpfc_sli4_hba_down(struct lpfc_hba *phba)
-{
-	/* Stop the SLI4 device port */
-	lpfc_stop_port(phba);
-
-	/* Tear down the queues in the HBA */
-	lpfc_sli4_queue_unset(phba);
-
-	/* unregister default FCFI from the HBA */
-	lpfc_sli4_fcfi_unreg(phba, phba->fcf.fcfi);
-
-	return 1;
-}
-
-/**
  * lpfc_sli_pcimem_bcopy - SLI memory copy function
  * @srcp: Source memory pointer.
  * @destp: Destination memory pointer.
@@ -6957,7 +7521,7 @@ lpfc_sli_ring_taggedbuf_get(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 	struct lpfc_dmabuf *mp, *next_mp;
 	struct list_head *slp = &pring->postbufq;
 
-	/* Search postbufq, from the begining, looking for a match on tag */
+	/* Search postbufq, from the beginning, looking for a match on tag */
 	spin_lock_irq(&phba->hbalock);
 	list_for_each_entry_safe(mp, next_mp, &pring->postbufq, list) {
 		if (mp->buffer_tag == tag) {
@@ -7001,7 +7565,7 @@ lpfc_sli_ringpostbuf_get(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 	struct lpfc_dmabuf *mp, *next_mp;
 	struct list_head *slp = &pring->postbufq;
 
-	/* Search postbufq, from the begining, looking for a match on phys */
+	/* Search postbufq, from the beginning, looking for a match on phys */
 	spin_lock_irq(&phba->hbalock);
 	list_for_each_entry_safe(mp, next_mp, &pring->postbufq, list) {
 		if (mp->phys == phys) {
@@ -7061,13 +7625,6 @@ lpfc_sli_abort_els_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 			 */
 			abort_iocb = phba->sli.iocbq_lookup[abort_context];
 
-		lpfc_printf_log(phba, KERN_INFO, LOG_ELS | LOG_SLI,
-				"0327 Cannot abort els iocb %p "
-				"with tag %x context %x, abort status %x, "
-				"abort code %x\n",
-				abort_iocb, abort_iotag, abort_context,
-				irsp->ulpStatus, irsp->un.ulpWord[4]);
-
 		/*
 		 *  If the iocb is not found in Firmware queue the iocb
 		 *  might have completed already. Do not free it again.
@@ -7086,6 +7643,13 @@ lpfc_sli_abort_els_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 			if (abort_iocb && phba->sli_rev == LPFC_SLI_REV4)
 				abort_context = abort_iocb->iocb.ulpContext;
 		}
+
+		lpfc_printf_log(phba, KERN_WARNING, LOG_ELS | LOG_SLI,
+				"0327 Cannot abort els iocb %p "
+				"with tag %x context %x, abort status %x, "
+				"abort code %x\n",
+				abort_iocb, abort_iotag, abort_context,
+				irsp->ulpStatus, irsp->un.ulpWord[4]);
 		/*
 		 * make sure we have the right iocbq before taking it
 		 * off the txcmplq and try to call completion routine.
@@ -7103,14 +7667,15 @@ lpfc_sli_abort_els_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 			 * following abort XRI from the HBA.
 			 */
 			list_del_init(&abort_iocb->list);
-			pring->txcmplq_cnt--;
-			spin_unlock_irq(&phba->hbalock);
+			if (abort_iocb->iocb_flag & LPFC_IO_ON_Q) {
+				abort_iocb->iocb_flag &= ~LPFC_IO_ON_Q;
+				pring->txcmplq_cnt--;
+			}
 
 			/* Firmware could still be in progress of DMAing
 			 * payload, so don't free data buffer till after
 			 * a hbeat.
 			 */
-			spin_lock_irq(&phba->hbalock);
 			abort_iocb->iocb_flag |= LPFC_DELAY_MEM_FREE;
 			abort_iocb->iocb_flag &= ~LPFC_DRIVER_ABORTED;
 			spin_unlock_irq(&phba->hbalock);
@@ -7118,7 +7683,8 @@ lpfc_sli_abort_els_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 			abort_iocb->iocb.ulpStatus = IOSTAT_LOCAL_REJECT;
 			abort_iocb->iocb.un.ulpWord[4] = IOERR_ABORT_REQUESTED;
 			(abort_iocb->iocb_cmpl)(phba, abort_iocb, abort_iocb);
-		}
+		} else
+			spin_unlock_irq(&phba->hbalock);
 	}
 
 	lpfc_sli_release_iocbq(phba, cmdiocb);
@@ -7156,25 +7722,26 @@ lpfc_ignore_els_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 }
 
 /**
- * lpfc_sli_issue_abort_iotag - Abort function for a command iocb
+ * lpfc_sli_abort_iotag_issue - Issue abort for a command iocb
  * @phba: Pointer to HBA context object.
  * @pring: Pointer to driver SLI ring object.
  * @cmdiocb: Pointer to driver command iocb object.
  *
- * This function issues an abort iocb for the provided command
- * iocb. This function is called with hbalock held.
- * The function returns 0 when it fails due to memory allocation
- * failure or when the command iocb is an abort request.
+ * This function issues an abort iocb for the provided command iocb down to
+ * the port. Other than the case the outstanding command iocb is an abort
+ * request, this function issues abort out unconditionally. This function is
+ * called with hbalock held. The function returns 0 when it fails due to
+ * memory allocation failure or when the command iocb is an abort request.
  **/
-int
-lpfc_sli_issue_abort_iotag(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
+static int
+lpfc_sli_abort_iotag_issue(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 			   struct lpfc_iocbq *cmdiocb)
 {
 	struct lpfc_vport *vport = cmdiocb->vport;
 	struct lpfc_iocbq *abtsiocbp;
 	IOCB_t *icmd = NULL;
 	IOCB_t *iabt = NULL;
-	int retval = IOCB_ERROR;
+	int retval;
 
 	/*
 	 * There are certain command types we don't want to abort.  And we
@@ -7186,18 +7753,6 @@ lpfc_sli_issue_abort_iotag(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 	    icmd->ulpCommand == CMD_CLOSE_XRI_CN ||
 	    (cmdiocb->iocb_flag & LPFC_DRIVER_ABORTED) != 0)
 		return 0;
-
-	/* If we're unloading, don't abort iocb on the ELS ring, but change the
-	 * callback so that nothing happens when it finishes.
-	 */
-	if ((vport->load_flag & FC_UNLOADING) &&
-	    (pring->ringno == LPFC_ELS_RING)) {
-		if (cmdiocb->iocb_flag & LPFC_IO_FABRIC)
-			cmdiocb->fabric_iocb_cmpl = lpfc_ignore_els_cmpl;
-		else
-			cmdiocb->iocb_cmpl = lpfc_ignore_els_cmpl;
-		goto abort_iotag_exit;
-	}
 
 	/* issue ABTS for this IOCB based on iotag */
 	abtsiocbp = __lpfc_sli_get_iocbq(phba);
@@ -7236,12 +7791,70 @@ lpfc_sli_issue_abort_iotag(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 	lpfc_printf_vlog(vport, KERN_INFO, LOG_SLI,
 			 "0339 Abort xri x%x, original iotag x%x, "
 			 "abort cmd iotag x%x\n",
+			 iabt->un.acxri.abortIoTag,
 			 iabt->un.acxri.abortContextTag,
-			 iabt->un.acxri.abortIoTag, abtsiocbp->iotag);
+			 abtsiocbp->iotag);
 	retval = __lpfc_sli_issue_iocb(phba, pring->ringno, abtsiocbp, 0);
 
 	if (retval)
 		__lpfc_sli_release_iocbq(phba, abtsiocbp);
+
+	/*
+	 * Caller to this routine should check for IOCB_ERROR
+	 * and handle it properly.  This routine no longer removes
+	 * iocb off txcmplq and call compl in case of IOCB_ERROR.
+	 */
+	return retval;
+}
+
+/**
+ * lpfc_sli_issue_abort_iotag - Abort function for a command iocb
+ * @phba: Pointer to HBA context object.
+ * @pring: Pointer to driver SLI ring object.
+ * @cmdiocb: Pointer to driver command iocb object.
+ *
+ * This function issues an abort iocb for the provided command iocb. In case
+ * of unloading, the abort iocb will not be issued to commands on the ELS
+ * ring. Instead, the callback function shall be changed to those commands
+ * so that nothing happens when them finishes. This function is called with
+ * hbalock held. The function returns 0 when the command iocb is an abort
+ * request.
+ **/
+int
+lpfc_sli_issue_abort_iotag(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
+			   struct lpfc_iocbq *cmdiocb)
+{
+	struct lpfc_vport *vport = cmdiocb->vport;
+	int retval = IOCB_ERROR;
+	IOCB_t *icmd = NULL;
+
+	/*
+	 * There are certain command types we don't want to abort.  And we
+	 * don't want to abort commands that are already in the process of
+	 * being aborted.
+	 */
+	icmd = &cmdiocb->iocb;
+	if (icmd->ulpCommand == CMD_ABORT_XRI_CN ||
+	    icmd->ulpCommand == CMD_CLOSE_XRI_CN ||
+	    (cmdiocb->iocb_flag & LPFC_DRIVER_ABORTED) != 0)
+		return 0;
+
+	/*
+	 * If we're unloading, don't abort iocb on the ELS ring, but change
+	 * the callback so that nothing happens when it finishes.
+	 */
+	if ((vport->load_flag & FC_UNLOADING) &&
+	    (pring->ringno == LPFC_ELS_RING)) {
+		if (cmdiocb->iocb_flag & LPFC_IO_FABRIC)
+			cmdiocb->fabric_iocb_cmpl = lpfc_ignore_els_cmpl;
+		else
+			cmdiocb->iocb_cmpl = lpfc_ignore_els_cmpl;
+		goto abort_iotag_exit;
+	}
+
+	/* Now, we try to issue the abort to the cmdiocb out */
+	retval = lpfc_sli_abort_iotag_issue(phba, pring, cmdiocb);
+
 abort_iotag_exit:
 	/*
 	 * Caller to this routine should check for IOCB_ERROR
@@ -7249,6 +7862,62 @@ abort_iotag_exit:
 	 * iocb off txcmplq and call compl in case of IOCB_ERROR.
 	 */
 	return retval;
+}
+
+/**
+ * lpfc_sli_iocb_ring_abort - Unconditionally abort all iocbs on an iocb ring
+ * @phba: Pointer to HBA context object.
+ * @pring: Pointer to driver SLI ring object.
+ *
+ * This function aborts all iocbs in the given ring and frees all the iocb
+ * objects in txq. This function issues abort iocbs unconditionally for all
+ * the iocb commands in txcmplq. The iocbs in the txcmplq is not guaranteed
+ * to complete before the return of this function. The caller is not required
+ * to hold any locks.
+ **/
+static void
+lpfc_sli_iocb_ring_abort(struct lpfc_hba *phba, struct lpfc_sli_ring *pring)
+{
+	LIST_HEAD(completions);
+	struct lpfc_iocbq *iocb, *next_iocb;
+
+	if (pring->ringno == LPFC_ELS_RING)
+		lpfc_fabric_abort_hba(phba);
+
+	spin_lock_irq(&phba->hbalock);
+
+	/* Take off all the iocbs on txq for cancelling */
+	list_splice_init(&pring->txq, &completions);
+	pring->txq_cnt = 0;
+
+	/* Next issue ABTS for everything on the txcmplq */
+	list_for_each_entry_safe(iocb, next_iocb, &pring->txcmplq, list)
+		lpfc_sli_abort_iotag_issue(phba, pring, iocb);
+
+	spin_unlock_irq(&phba->hbalock);
+
+	/* Cancel all the IOCBs from the completions list */
+	lpfc_sli_cancel_iocbs(phba, &completions, IOSTAT_LOCAL_REJECT,
+			      IOERR_SLI_ABORTED);
+}
+
+/**
+ * lpfc_sli_hba_iocb_abort - Abort all iocbs to an hba.
+ * @phba: pointer to lpfc HBA data structure.
+ *
+ * This routine will abort all pending and outstanding iocbs to an HBA.
+ **/
+void
+lpfc_sli_hba_iocb_abort(struct lpfc_hba *phba)
+{
+	struct lpfc_sli *psli = &phba->sli;
+	struct lpfc_sli_ring *pring;
+	int i;
+
+	for (i = 0; i < psli->num_rings; i++) {
+		pring = &psli->ring[i];
+		lpfc_sli_iocb_ring_abort(phba, pring);
+	}
 }
 
 /**
@@ -7567,7 +8236,7 @@ lpfc_sli_issue_iocb_wait(struct lpfc_hba *phba,
 	long timeleft, timeout_req = 0;
 	int retval = IOCB_SUCCESS;
 	uint32_t creg_val;
-
+	struct lpfc_sli_ring *pring = &phba->sli.ring[LPFC_ELS_RING];
 	/*
 	 * If the caller has provided a response iocbq buffer, then context2
 	 * is NULL or its an error.
@@ -7583,13 +8252,15 @@ lpfc_sli_issue_iocb_wait(struct lpfc_hba *phba,
 	piocb->iocb_flag &= ~LPFC_IO_WAKE;
 
 	if (phba->cfg_poll & DISABLE_FCP_RING_INT) {
-		creg_val = readl(phba->HCregaddr);
+		if (lpfc_readl(phba->HCregaddr, &creg_val))
+			return IOCB_ERROR;
 		creg_val |= (HC_R0INT_ENA << LPFC_FCP_RING);
 		writel(creg_val, phba->HCregaddr);
 		readl(phba->HCregaddr); /* flush */
 	}
 
-	retval = lpfc_sli_issue_iocb(phba, ring_number, piocb, 0);
+	retval = lpfc_sli_issue_iocb(phba, ring_number, piocb,
+				     SLI_IOCB_RET_IOCB);
 	if (retval == IOCB_SUCCESS) {
 		timeout_req = timeout * HZ;
 		timeleft = wait_event_timeout(done_q,
@@ -7611,6 +8282,11 @@ lpfc_sli_issue_iocb_wait(struct lpfc_hba *phba,
 					timeout, (timeleft / jiffies));
 			retval = IOCB_TIMEDOUT;
 		}
+	} else if (retval == IOCB_BUSY) {
+		lpfc_printf_log(phba, KERN_INFO, LOG_SLI,
+			"2818 Max IOCBs %d txq cnt %d txcmplq cnt %d\n",
+			phba->iocb_cnt, pring->txq_cnt, pring->txcmplq_cnt);
+		return retval;
 	} else {
 		lpfc_printf_log(phba, KERN_INFO, LOG_SLI,
 				"0332 IOCB wait issue failed, Data x%x\n",
@@ -7619,7 +8295,8 @@ lpfc_sli_issue_iocb_wait(struct lpfc_hba *phba,
 	}
 
 	if (phba->cfg_poll & DISABLE_FCP_RING_INT) {
-		creg_val = readl(phba->HCregaddr);
+		if (lpfc_readl(phba->HCregaddr, &creg_val))
+			return IOCB_ERROR;
 		creg_val &= ~(HC_R0INT_ENA << LPFC_FCP_RING);
 		writel(creg_val, phba->HCregaddr);
 		readl(phba->HCregaddr); /* flush */
@@ -7691,9 +8368,10 @@ lpfc_sli_issue_mbox_wait(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmboxq,
 		 * if LPFC_MBX_WAKE flag is set the mailbox is completed
 		 * else do not free the resources.
 		 */
-		if (pmboxq->mbox_flag & LPFC_MBX_WAKE)
+		if (pmboxq->mbox_flag & LPFC_MBX_WAKE) {
 			retval = MBX_SUCCESS;
-		else {
+			lpfc_sli4_swap_str(phba, pmboxq);
+		} else {
 			retval = MBX_TIMEOUT;
 			pmboxq->mbox_cmpl = lpfc_sli_def_mbox_cmpl;
 		}
@@ -7760,7 +8438,7 @@ lpfc_sli_mbox_sys_shutdown(struct lpfc_hba *phba)
  * for possible error attention events. The caller must hold the hostlock
  * with spin_lock_irq().
  *
- * This fucntion returns 1 when there is Error Attention in the Host Attention
+ * This function returns 1 when there is Error Attention in the Host Attention
  * Register and returns 0 otherwise.
  **/
 static int
@@ -7769,15 +8447,18 @@ lpfc_sli_eratt_read(struct lpfc_hba *phba)
 	uint32_t ha_copy;
 
 	/* Read chip Host Attention (HA) register */
-	ha_copy = readl(phba->HAregaddr);
+	if (lpfc_readl(phba->HAregaddr, &ha_copy))
+		goto unplug_err;
+
 	if (ha_copy & HA_ERATT) {
 		/* Read host status register to retrieve error event */
-		lpfc_sli_read_hs(phba);
+		if (lpfc_sli_read_hs(phba))
+			goto unplug_err;
 
 		/* Check if there is a deferred error condition is active */
 		if ((HS_FFER1 & phba->work_hs) &&
 		    ((HS_FFER2 | HS_FFER3 | HS_FFER4 | HS_FFER5 |
-		     HS_FFER6 | HS_FFER7) & phba->work_hs)) {
+		      HS_FFER6 | HS_FFER7 | HS_FFER8) & phba->work_hs)) {
 			phba->hba_flag |= DEFER_ERATT;
 			/* Clear all interrupt enable conditions */
 			writel(0, phba->HCregaddr);
@@ -7791,6 +8472,15 @@ lpfc_sli_eratt_read(struct lpfc_hba *phba)
 		return 1;
 	}
 	return 0;
+
+unplug_err:
+	/* Set the driver HS work bitmap */
+	phba->work_hs |= UNPLUG_ERR;
+	/* Set the driver HA work bitmap */
+	phba->work_ha |= HA_ERATT;
+	/* Indicate polling handles this ERATT */
+	phba->hba_flag |= HBA_ERATT_HANDLED;
+	return 1;
 }
 
 /**
@@ -7801,36 +8491,86 @@ lpfc_sli_eratt_read(struct lpfc_hba *phba)
  * for possible error attention events. The caller must hold the hostlock
  * with spin_lock_irq().
  *
- * This fucntion returns 1 when there is Error Attention in the Host Attention
+ * This function returns 1 when there is Error Attention in the Host Attention
  * Register and returns 0 otherwise.
  **/
 static int
 lpfc_sli4_eratt_read(struct lpfc_hba *phba)
 {
 	uint32_t uerr_sta_hi, uerr_sta_lo;
+	uint32_t if_type, portsmphr;
+	struct lpfc_register portstat_reg;
 
-	/* For now, use the SLI4 device internal unrecoverable error
+	/*
+	 * For now, use the SLI4 device internal unrecoverable error
 	 * registers for error attention. This can be changed later.
 	 */
-	uerr_sta_lo = readl(phba->sli4_hba.UERRLOregaddr);
-	uerr_sta_hi = readl(phba->sli4_hba.UERRHIregaddr);
-	if ((~phba->sli4_hba.ue_mask_lo & uerr_sta_lo) ||
-	    (~phba->sli4_hba.ue_mask_hi & uerr_sta_hi)) {
+	if_type = bf_get(lpfc_sli_intf_if_type, &phba->sli4_hba.sli_intf);
+	switch (if_type) {
+	case LPFC_SLI_INTF_IF_TYPE_0:
+		if (lpfc_readl(phba->sli4_hba.u.if_type0.UERRLOregaddr,
+			&uerr_sta_lo) ||
+			lpfc_readl(phba->sli4_hba.u.if_type0.UERRHIregaddr,
+			&uerr_sta_hi)) {
+			phba->work_hs |= UNPLUG_ERR;
+			phba->work_ha |= HA_ERATT;
+			phba->hba_flag |= HBA_ERATT_HANDLED;
+			return 1;
+		}
+		if ((~phba->sli4_hba.ue_mask_lo & uerr_sta_lo) ||
+		    (~phba->sli4_hba.ue_mask_hi & uerr_sta_hi)) {
+			lpfc_printf_log(phba, KERN_ERR, LOG_INIT,
+					"1423 HBA Unrecoverable error: "
+					"uerr_lo_reg=0x%x, uerr_hi_reg=0x%x, "
+					"ue_mask_lo_reg=0x%x, "
+					"ue_mask_hi_reg=0x%x\n",
+					uerr_sta_lo, uerr_sta_hi,
+					phba->sli4_hba.ue_mask_lo,
+					phba->sli4_hba.ue_mask_hi);
+			phba->work_status[0] = uerr_sta_lo;
+			phba->work_status[1] = uerr_sta_hi;
+			phba->work_ha |= HA_ERATT;
+			phba->hba_flag |= HBA_ERATT_HANDLED;
+			return 1;
+		}
+		break;
+	case LPFC_SLI_INTF_IF_TYPE_2:
+		if (lpfc_readl(phba->sli4_hba.u.if_type2.STATUSregaddr,
+			&portstat_reg.word0) ||
+			lpfc_readl(phba->sli4_hba.PSMPHRregaddr,
+			&portsmphr)){
+			phba->work_hs |= UNPLUG_ERR;
+			phba->work_ha |= HA_ERATT;
+			phba->hba_flag |= HBA_ERATT_HANDLED;
+			return 1;
+		}
+		if (bf_get(lpfc_sliport_status_err, &portstat_reg)) {
+			phba->work_status[0] =
+				readl(phba->sli4_hba.u.if_type2.ERR1regaddr);
+			phba->work_status[1] =
+				readl(phba->sli4_hba.u.if_type2.ERR2regaddr);
+			lpfc_printf_log(phba, KERN_ERR, LOG_INIT,
+					"2885 Port Error Detected: "
+					"port status reg 0x%x, "
+					"port smphr reg 0x%x, "
+					"error 1=0x%x, error 2=0x%x\n",
+					portstat_reg.word0,
+					portsmphr,
+					phba->work_status[0],
+					phba->work_status[1]);
+			phba->work_ha |= HA_ERATT;
+			phba->hba_flag |= HBA_ERATT_HANDLED;
+			return 1;
+		}
+		break;
+	case LPFC_SLI_INTF_IF_TYPE_1:
+	default:
 		lpfc_printf_log(phba, KERN_ERR, LOG_INIT,
-				"1423 HBA Unrecoverable error: "
-				"uerr_lo_reg=0x%x, uerr_hi_reg=0x%x, "
-				"ue_mask_lo_reg=0x%x, ue_mask_hi_reg=0x%x\n",
-				uerr_sta_lo, uerr_sta_hi,
-				phba->sli4_hba.ue_mask_lo,
-				phba->sli4_hba.ue_mask_hi);
-		phba->work_status[0] = uerr_sta_lo;
-		phba->work_status[1] = uerr_sta_hi;
-		/* Set the driver HA work bitmap */
-		phba->work_ha |= HA_ERATT;
-		/* Indicate polling handles this ERATT */
-		phba->hba_flag |= HBA_ERATT_HANDLED;
+				"2886 HBA Error Attention on unsupported "
+				"if type %d.", if_type);
 		return 1;
 	}
+
 	return 0;
 }
 
@@ -7841,7 +8581,7 @@ lpfc_sli4_eratt_read(struct lpfc_hba *phba)
  * This function is called from timer soft interrupt context to check HBA's
  * error attention register bit for error attention events.
  *
- * This fucntion returns 1 when there is Error Attention in the Host Attention
+ * This function returns 1 when there is Error Attention in the Host Attention
  * Register and returns 0 otherwise.
  **/
 int
@@ -7885,7 +8625,7 @@ lpfc_sli_check_eratt(struct lpfc_hba *phba)
 		ha_copy = lpfc_sli_eratt_read(phba);
 		break;
 	case LPFC_SLI_REV4:
-		/* Read devcie Uncoverable Error (UERR) registers */
+		/* Read device Uncoverable Error (UERR) registers */
 		ha_copy = lpfc_sli4_eratt_read(phba);
 		break;
 	default:
@@ -7984,7 +8724,8 @@ lpfc_sli_sp_intr_handler(int irq, void *dev_id)
 			return IRQ_NONE;
 		/* Need to read HA REG for slow-path events */
 		spin_lock_irqsave(&phba->hbalock, iflag);
-		ha_copy = readl(phba->HAregaddr);
+		if (lpfc_readl(phba->HAregaddr, &ha_copy))
+			goto unplug_error;
 		/* If somebody is waiting to handle an eratt don't process it
 		 * here. The brdkill function will do this.
 		 */
@@ -8010,7 +8751,9 @@ lpfc_sli_sp_intr_handler(int irq, void *dev_id)
 		}
 
 		/* Clear up only attention source related to slow-path */
-		hc_copy = readl(phba->HCregaddr);
+		if (lpfc_readl(phba->HCregaddr, &hc_copy))
+			goto unplug_error;
+
 		writel(hc_copy & ~(HC_MBINT_ENA | HC_R2INT_ENA |
 			HC_LAINT_ENA | HC_ERINT_ENA),
 			phba->HCregaddr);
@@ -8033,7 +8776,8 @@ lpfc_sli_sp_intr_handler(int irq, void *dev_id)
 				 */
 				spin_lock_irqsave(&phba->hbalock, iflag);
 				phba->sli.sli_flag &= ~LPFC_PROCESS_LA;
-				control = readl(phba->HCregaddr);
+				if (lpfc_readl(phba->HCregaddr, &control))
+					goto unplug_error;
 				control &= ~HC_LAINT_ENA;
 				writel(control, phba->HCregaddr);
 				readl(phba->HCregaddr); /* flush */
@@ -8053,7 +8797,8 @@ lpfc_sli_sp_intr_handler(int irq, void *dev_id)
 			status >>= (4*LPFC_ELS_RING);
 			if (status & HA_RXMASK) {
 				spin_lock_irqsave(&phba->hbalock, iflag);
-				control = readl(phba->HCregaddr);
+				if (lpfc_readl(phba->HCregaddr, &control))
+					goto unplug_error;
 
 				lpfc_debugfs_slow_ring_trc(phba,
 				"ISR slow ring:   ctl:x%x stat:x%x isrcnt:x%x",
@@ -8086,14 +8831,16 @@ lpfc_sli_sp_intr_handler(int irq, void *dev_id)
 		}
 		spin_lock_irqsave(&phba->hbalock, iflag);
 		if (work_ha_copy & HA_ERATT) {
-			lpfc_sli_read_hs(phba);
+			if (lpfc_sli_read_hs(phba))
+				goto unplug_error;
 			/*
 			 * Check if there is a deferred error condition
 			 * is active
 			 */
 			if ((HS_FFER1 & phba->work_hs) &&
 				((HS_FFER2 | HS_FFER3 | HS_FFER4 | HS_FFER5 |
-				HS_FFER6 | HS_FFER7) & phba->work_hs)) {
+				  HS_FFER6 | HS_FFER7 | HS_FFER8) &
+				  phba->work_hs)) {
 				phba->hba_flag |= DEFER_ERATT;
 				/* Clear all interrupt enable conditions */
 				writel(0, phba->HCregaddr);
@@ -8133,6 +8880,12 @@ lpfc_sli_sp_intr_handler(int irq, void *dev_id)
 				if (pmb->mbox_cmpl) {
 					lpfc_sli_pcimem_bcopy(mbox, pmbox,
 							MAILBOX_CMD_SIZE);
+					if (pmb->out_ext_byte_len &&
+						pmb->context2)
+						lpfc_sli_pcimem_bcopy(
+						phba->mbox_ext,
+						pmb->context2,
+						pmb->out_ext_byte_len);
 				}
 				if (pmb->mbox_flag & LPFC_MBX_IMED_UNREG) {
 					pmb->mbox_flag &= ~LPFC_MBX_IMED_UNREG;
@@ -8210,6 +8963,9 @@ send_current_mbox:
 		lpfc_worker_wake_up(phba);
 	}
 	return IRQ_HANDLED;
+unplug_error:
+	spin_unlock_irqrestore(&phba->hbalock, iflag);
+	return IRQ_HANDLED;
 
 } /* lpfc_sli_sp_intr_handler */
 
@@ -8257,7 +9013,8 @@ lpfc_sli_fp_intr_handler(int irq, void *dev_id)
 		if (lpfc_intr_state_check(phba))
 			return IRQ_NONE;
 		/* Need to read HA REG for FCP ring and other ring events */
-		ha_copy = readl(phba->HAregaddr);
+		if (lpfc_readl(phba->HAregaddr, &ha_copy))
+			return IRQ_HANDLED;
 		/* Clear up only attention source related to fast-path */
 		spin_lock_irqsave(&phba->hbalock, iflag);
 		/*
@@ -8342,7 +9099,11 @@ lpfc_sli_intr_handler(int irq, void *dev_id)
 		return IRQ_NONE;
 
 	spin_lock(&phba->hbalock);
-	phba->ha_copy = readl(phba->HAregaddr);
+	if (lpfc_readl(phba->HAregaddr, &phba->ha_copy)) {
+		spin_unlock(&phba->hbalock);
+		return IRQ_HANDLED;
+	}
+
 	if (unlikely(!phba->ha_copy)) {
 		spin_unlock(&phba->hbalock);
 		return IRQ_NONE;
@@ -8359,12 +9120,15 @@ lpfc_sli_intr_handler(int irq, void *dev_id)
 	 * If there is deferred error attention, do not check for any interrupt.
 	 */
 	if (unlikely(phba->hba_flag & DEFER_ERATT)) {
-		spin_unlock_irq(&phba->hbalock);
+		spin_unlock(&phba->hbalock);
 		return IRQ_NONE;
 	}
 
 	/* Clear attention sources except link and error attentions */
-	hc_copy = readl(phba->HCregaddr);
+	if (lpfc_readl(phba->HCregaddr, &hc_copy)) {
+		spin_unlock(&phba->hbalock);
+		return IRQ_HANDLED;
+	}
 	writel(hc_copy & ~(HC_MBINT_ENA | HC_R0INT_ENA | HC_R1INT_ENA
 		| HC_R2INT_ENA | HC_LAINT_ENA | HC_ERINT_ENA),
 		phba->HCregaddr);
@@ -8750,12 +9514,17 @@ lpfc_sli4_sp_handle_els_wcqe(struct lpfc_hba *phba,
 {
 	struct lpfc_iocbq *irspiocbq;
 	unsigned long iflags;
+	struct lpfc_sli_ring *pring = &phba->sli.ring[LPFC_FCP_RING];
 
 	/* Get an irspiocbq for later ELS response processing use */
 	irspiocbq = lpfc_sli_get_iocbq(phba);
 	if (!irspiocbq) {
 		lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
-				"0387 Failed to allocate an iocbq\n");
+			"0387 NO IOCBQ data: txq_cnt=%d iocb_cnt=%d "
+			"fcp_txcmplq_cnt=%d, els_txcmplq_cnt=%d\n",
+			pring->txq_cnt, phba->iocb_cnt,
+			phba->sli.ring[LPFC_FCP_RING].txcmplq_cnt,
+			phba->sli.ring[LPFC_ELS_RING].txcmplq_cnt);
 		return false;
 	}
 
@@ -8915,7 +9684,7 @@ out:
  * @cq: Pointer to the completion queue.
  * @wcqe: Pointer to a completion queue entry.
  *
- * This routine process a slow-path work-queue or recieve queue completion queue
+ * This routine process a slow-path work-queue or receive queue completion queue
  * entry.
  *
  * Return: true if work posted to worker thread, otherwise false.
@@ -8934,6 +9703,7 @@ lpfc_sli4_sp_handle_cqe(struct lpfc_hba *phba, struct lpfc_queue *cq,
 	switch (bf_get(lpfc_cqe_code, &cqevt)) {
 	case CQE_CODE_COMPL_WQE:
 		/* Process the WQ/RQ complete event */
+		phba->last_completion_time = jiffies;
 		workposted = lpfc_sli4_sp_handle_els_wcqe(phba,
 				(struct lpfc_wcqe_complete *)&cqevt);
 		break;
@@ -8944,11 +9714,13 @@ lpfc_sli4_sp_handle_cqe(struct lpfc_hba *phba, struct lpfc_queue *cq,
 		break;
 	case CQE_CODE_XRI_ABORTED:
 		/* Process the WQ XRI abort event */
+		phba->last_completion_time = jiffies;
 		workposted = lpfc_sli4_sp_handle_abort_xri_wcqe(phba, cq,
 				(struct sli4_wcqe_xri_aborted *)&cqevt);
 		break;
 	case CQE_CODE_RECEIVE:
 		/* Process the RQ event */
+		phba->last_completion_time = jiffies;
 		workposted = lpfc_sli4_sp_handle_rcqe(phba,
 				(struct lpfc_rcqe *)&cqevt);
 		break;
@@ -8983,17 +9755,17 @@ lpfc_sli4_sp_handle_eqe(struct lpfc_hba *phba, struct lpfc_eqe *eqe)
 	int ecount = 0;
 	uint16_t cqid;
 
-	if (bf_get(lpfc_eqe_major_code, eqe) != 0) {
+	if (bf_get_le32(lpfc_eqe_major_code, eqe) != 0) {
 		lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
 				"0359 Not a valid slow-path completion "
 				"event: majorcode=x%x, minorcode=x%x\n",
-				bf_get(lpfc_eqe_major_code, eqe),
-				bf_get(lpfc_eqe_minor_code, eqe));
+				bf_get_le32(lpfc_eqe_major_code, eqe),
+				bf_get_le32(lpfc_eqe_minor_code, eqe));
 		return;
 	}
 
 	/* Get the reference to the corresponding CQ */
-	cqid = bf_get(lpfc_eqe_resource_id, eqe);
+	cqid = bf_get_le32(lpfc_eqe_resource_id, eqe);
 
 	/* Search for completion queue pointer matching this cqid */
 	speq = phba->sli4_hba.sp_eq;
@@ -9004,9 +9776,10 @@ lpfc_sli4_sp_handle_eqe(struct lpfc_hba *phba, struct lpfc_eqe *eqe)
 		}
 	}
 	if (unlikely(!cq)) {
-		lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
-				"0365 Slow-path CQ identifier (%d) does "
-				"not exist\n", cqid);
+		if (phba->sli.sli_flag & LPFC_SLI_ACTIVE)
+			lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
+					"0365 Slow-path CQ identifier "
+					"(%d) does not exist\n", cqid);
 		return;
 	}
 
@@ -9177,6 +9950,7 @@ lpfc_sli4_fp_handle_wcqe(struct lpfc_hba *phba, struct lpfc_queue *cq,
 	switch (bf_get(lpfc_wcqe_c_code, &wcqe)) {
 	case CQE_CODE_COMPL_WQE:
 		/* Process the WQ complete event */
+		phba->last_completion_time = jiffies;
 		lpfc_sli4_fp_handle_fcp_wcqe(phba,
 				(struct lpfc_wcqe_complete *)&wcqe);
 		break;
@@ -9187,6 +9961,7 @@ lpfc_sli4_fp_handle_wcqe(struct lpfc_hba *phba, struct lpfc_queue *cq,
 		break;
 	case CQE_CODE_XRI_ABORTED:
 		/* Process the WQ XRI abort event */
+		phba->last_completion_time = jiffies;
 		workposted = lpfc_sli4_sp_handle_abort_xri_wcqe(phba, cq,
 				(struct sli4_wcqe_xri_aborted *)&wcqe);
 		break;
@@ -9221,25 +9996,26 @@ lpfc_sli4_fp_handle_eqe(struct lpfc_hba *phba, struct lpfc_eqe *eqe,
 	uint16_t cqid;
 	int ecount = 0;
 
-	if (unlikely(bf_get(lpfc_eqe_major_code, eqe) != 0)) {
+	if (unlikely(bf_get_le32(lpfc_eqe_major_code, eqe) != 0)) {
 		lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
 				"0366 Not a valid fast-path completion "
 				"event: majorcode=x%x, minorcode=x%x\n",
-				bf_get(lpfc_eqe_major_code, eqe),
-				bf_get(lpfc_eqe_minor_code, eqe));
+				bf_get_le32(lpfc_eqe_major_code, eqe),
+				bf_get_le32(lpfc_eqe_minor_code, eqe));
 		return;
 	}
 
 	cq = phba->sli4_hba.fcp_cq[fcp_cqidx];
 	if (unlikely(!cq)) {
-		lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
-				"0367 Fast-path completion queue does not "
-				"exist\n");
+		if (phba->sli.sli_flag & LPFC_SLI_ACTIVE)
+			lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
+					"0367 Fast-path completion queue "
+					"does not exist\n");
 		return;
 	}
 
 	/* Get the reference to the corresponding CQ */
-	cqid = bf_get(lpfc_eqe_resource_id, eqe);
+	cqid = bf_get_le32(lpfc_eqe_resource_id, eqe);
 	if (unlikely(cqid != cq->queue_id)) {
 		lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
 				"0368 Miss-matched fast-path completion "
@@ -9491,7 +10267,7 @@ lpfc_sli4_intr_handler(int irq, void *dev_id)
  * lpfc_sli4_queue_free - free a queue structure and associated memory
  * @queue: The queue structure to free.
  *
- * This function frees a queue structure and the DMAable memeory used for
+ * This function frees a queue structure and the DMAable memory used for
  * the host resident queue. This function must be called after destroying the
  * queue on the HBA.
  **/
@@ -9506,7 +10282,7 @@ lpfc_sli4_queue_free(struct lpfc_queue *queue)
 	while (!list_empty(&queue->page_list)) {
 		list_remove_head(&queue->page_list, dmabuf, struct lpfc_dmabuf,
 				 list);
-		dma_free_coherent(&queue->phba->pcidev->dev, PAGE_SIZE,
+		dma_free_coherent(&queue->phba->pcidev->dev, SLI4_PAGE_SIZE,
 				  dmabuf->virt, dmabuf->phys);
 		kfree(dmabuf);
 	}
@@ -9532,13 +10308,17 @@ lpfc_sli4_queue_alloc(struct lpfc_hba *phba, uint32_t entry_size,
 	struct lpfc_dmabuf *dmabuf;
 	int x, total_qe_count;
 	void *dma_pointer;
+	uint32_t hw_page_size = phba->sli4_hba.pc_sli4_params.if_page_sz;
 
+	if (!phba->sli4_hba.pc_sli4_params.supported)
+		hw_page_size = SLI4_PAGE_SIZE;
 
 	queue = kzalloc(sizeof(struct lpfc_queue) +
 			(sizeof(union sli4_qe) * entry_count), GFP_KERNEL);
 	if (!queue)
 		return NULL;
-	queue->page_count = (PAGE_ALIGN(entry_size * entry_count))/PAGE_SIZE;
+	queue->page_count = (ALIGN(entry_size * entry_count,
+			hw_page_size))/hw_page_size;
 	INIT_LIST_HEAD(&queue->list);
 	INIT_LIST_HEAD(&queue->page_list);
 	INIT_LIST_HEAD(&queue->child_list);
@@ -9547,19 +10327,19 @@ lpfc_sli4_queue_alloc(struct lpfc_hba *phba, uint32_t entry_size,
 		if (!dmabuf)
 			goto out_fail;
 		dmabuf->virt = dma_alloc_coherent(&phba->pcidev->dev,
-						  PAGE_SIZE, &dmabuf->phys,
+						  hw_page_size, &dmabuf->phys,
 						  GFP_KERNEL);
 		if (!dmabuf->virt) {
 			kfree(dmabuf);
 			goto out_fail;
 		}
-		memset(dmabuf->virt, 0, PAGE_SIZE);
+		memset(dmabuf->virt, 0, hw_page_size);
 		dmabuf->buffer_tag = x;
 		list_add_tail(&dmabuf->list, &queue->page_list);
 		/* initialize queue's entry array */
 		dma_pointer = dmabuf->virt;
 		for (; total_qe_count < entry_count &&
-		     dma_pointer < (PAGE_SIZE + dmabuf->virt);
+		     dma_pointer < (hw_page_size + dmabuf->virt);
 		     total_qe_count++, dma_pointer += entry_size) {
 			queue->qe[total_qe_count].address = dma_pointer;
 		}
@@ -9591,8 +10371,8 @@ out_fail:
  * command to finish before continuing.
  *
  * On success this function will return a zero. If unable to allocate enough
- * memory this function will return ENOMEM. If the queue create mailbox command
- * fails this function will return ENXIO.
+ * memory this function will return -ENOMEM. If the queue create mailbox command
+ * fails this function will return -ENXIO.
  **/
 uint32_t
 lpfc_eq_create(struct lpfc_hba *phba, struct lpfc_queue *eq, uint16_t imax)
@@ -9604,6 +10384,10 @@ lpfc_eq_create(struct lpfc_hba *phba, struct lpfc_queue *eq, uint16_t imax)
 	uint32_t shdr_status, shdr_add_status;
 	union lpfc_sli4_cfg_shdr *shdr;
 	uint16_t dmult;
+	uint32_t hw_page_size = phba->sli4_hba.pc_sli4_params.if_page_sz;
+
+	if (!phba->sli4_hba.pc_sli4_params.supported)
+		hw_page_size = SLI4_PAGE_SIZE;
 
 	mbox = mempool_alloc(phba->mbox_mem_pool, GFP_KERNEL);
 	if (!mbox)
@@ -9653,6 +10437,7 @@ lpfc_eq_create(struct lpfc_hba *phba, struct lpfc_queue *eq, uint16_t imax)
 		break;
 	}
 	list_for_each_entry(dmabuf, &eq->page_list, list) {
+		memset(dmabuf->virt, 0, hw_page_size);
 		eq_create->u.request.page[dmabuf->buffer_tag].addr_lo =
 					putPaddrLow(dmabuf->phys);
 		eq_create->u.request.page[dmabuf->buffer_tag].addr_hi =
@@ -9702,8 +10487,8 @@ lpfc_eq_create(struct lpfc_hba *phba, struct lpfc_queue *eq, uint16_t imax)
  * command to finish before continuing.
  *
  * On success this function will return a zero. If unable to allocate enough
- * memory this function will return ENOMEM. If the queue create mailbox command
- * fails this function will return ENXIO.
+ * memory this function will return -ENOMEM. If the queue create mailbox command
+ * fails this function will return -ENXIO.
  **/
 uint32_t
 lpfc_cq_create(struct lpfc_hba *phba, struct lpfc_queue *cq,
@@ -9715,6 +10500,10 @@ lpfc_cq_create(struct lpfc_hba *phba, struct lpfc_queue *cq,
 	int rc, length, status = 0;
 	uint32_t shdr_status, shdr_add_status;
 	union lpfc_sli4_cfg_shdr *shdr;
+	uint32_t hw_page_size = phba->sli4_hba.pc_sli4_params.if_page_sz;
+
+	if (!phba->sli4_hba.pc_sli4_params.supported)
+		hw_page_size = SLI4_PAGE_SIZE;
 
 	mbox = mempool_alloc(phba->mbox_mem_pool, GFP_KERNEL);
 	if (!mbox)
@@ -9725,11 +10514,22 @@ lpfc_cq_create(struct lpfc_hba *phba, struct lpfc_queue *cq,
 			 LPFC_MBOX_OPCODE_CQ_CREATE,
 			 length, LPFC_SLI4_MBX_EMBED);
 	cq_create = &mbox->u.mqe.un.cq_create;
+	shdr = (union lpfc_sli4_cfg_shdr *) &cq_create->header.cfg_shdr;
 	bf_set(lpfc_mbx_cq_create_num_pages, &cq_create->u.request,
 		    cq->page_count);
 	bf_set(lpfc_cq_context_event, &cq_create->u.request.context, 1);
 	bf_set(lpfc_cq_context_valid, &cq_create->u.request.context, 1);
-	bf_set(lpfc_cq_eq_id, &cq_create->u.request.context, eq->queue_id);
+	bf_set(lpfc_mbox_hdr_version, &shdr->request,
+	       phba->sli4_hba.pc_sli4_params.cqv);
+	if (phba->sli4_hba.pc_sli4_params.cqv == LPFC_Q_CREATE_VERSION_2) {
+		bf_set(lpfc_mbx_cq_create_page_size, &cq_create->u.request,
+		       (PAGE_SIZE/SLI4_PAGE_SIZE));
+		bf_set(lpfc_cq_eq_id_2, &cq_create->u.request.context,
+		       eq->queue_id);
+	} else {
+		bf_set(lpfc_cq_eq_id, &cq_create->u.request.context,
+		       eq->queue_id);
+	}
 	switch (cq->entry_count) {
 	default:
 		lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
@@ -9752,6 +10552,7 @@ lpfc_cq_create(struct lpfc_hba *phba, struct lpfc_queue *cq,
 		break;
 	}
 	list_for_each_entry(dmabuf, &cq->page_list, list) {
+		memset(dmabuf->virt, 0, hw_page_size);
 		cq_create->u.request.page[dmabuf->buffer_tag].addr_lo =
 					putPaddrLow(dmabuf->phys);
 		cq_create->u.request.page[dmabuf->buffer_tag].addr_hi =
@@ -9760,7 +10561,6 @@ lpfc_cq_create(struct lpfc_hba *phba, struct lpfc_queue *cq,
 	rc = lpfc_sli_issue_mbox(phba, mbox, MBX_POLL);
 
 	/* The IOCTL status is embedded in the mailbox subheader. */
-	shdr = (union lpfc_sli4_cfg_shdr *) &cq_create->header.cfg_shdr;
 	shdr_status = bf_get(lpfc_mbox_hdr_status, &shdr->response);
 	shdr_add_status = bf_get(lpfc_mbox_hdr_add_status, &shdr->response);
 	if (shdr_status || shdr_add_status || rc) {
@@ -9782,6 +10582,7 @@ lpfc_cq_create(struct lpfc_hba *phba, struct lpfc_queue *cq,
 	cq->type = type;
 	cq->subtype = subtype;
 	cq->queue_id = bf_get(lpfc_mbx_cq_create_q_id, &cq_create->u.response);
+	cq->assoc_qid = eq->queue_id;
 	cq->host_index = 0;
 	cq->hba_index = 0;
 
@@ -9791,9 +10592,70 @@ out:
 }
 
 /**
+ * lpfc_mq_create_fb_init - Send MCC_CREATE without async events registration
+ * @phba: HBA structure that indicates port to create a queue on.
+ * @mq: The queue structure to use to create the mailbox queue.
+ * @mbox: An allocated pointer to type LPFC_MBOXQ_t
+ * @cq: The completion queue to associate with this cq.
+ *
+ * This function provides failback (fb) functionality when the
+ * mq_create_ext fails on older FW generations.  It's purpose is identical
+ * to mq_create_ext otherwise.
+ *
+ * This routine cannot fail as all attributes were previously accessed and
+ * initialized in mq_create_ext.
+ **/
+static void
+lpfc_mq_create_fb_init(struct lpfc_hba *phba, struct lpfc_queue *mq,
+		       LPFC_MBOXQ_t *mbox, struct lpfc_queue *cq)
+{
+	struct lpfc_mbx_mq_create *mq_create;
+	struct lpfc_dmabuf *dmabuf;
+	int length;
+
+	length = (sizeof(struct lpfc_mbx_mq_create) -
+		  sizeof(struct lpfc_sli4_cfg_mhdr));
+	lpfc_sli4_config(phba, mbox, LPFC_MBOX_SUBSYSTEM_COMMON,
+			 LPFC_MBOX_OPCODE_MQ_CREATE,
+			 length, LPFC_SLI4_MBX_EMBED);
+	mq_create = &mbox->u.mqe.un.mq_create;
+	bf_set(lpfc_mbx_mq_create_num_pages, &mq_create->u.request,
+	       mq->page_count);
+	bf_set(lpfc_mq_context_cq_id, &mq_create->u.request.context,
+	       cq->queue_id);
+	bf_set(lpfc_mq_context_valid, &mq_create->u.request.context, 1);
+	switch (mq->entry_count) {
+	case 16:
+		bf_set(lpfc_mq_context_ring_size, &mq_create->u.request.context,
+		       LPFC_MQ_RING_SIZE_16);
+		break;
+	case 32:
+		bf_set(lpfc_mq_context_ring_size, &mq_create->u.request.context,
+		       LPFC_MQ_RING_SIZE_32);
+		break;
+	case 64:
+		bf_set(lpfc_mq_context_ring_size, &mq_create->u.request.context,
+		       LPFC_MQ_RING_SIZE_64);
+		break;
+	case 128:
+		bf_set(lpfc_mq_context_ring_size, &mq_create->u.request.context,
+		       LPFC_MQ_RING_SIZE_128);
+		break;
+	}
+	list_for_each_entry(dmabuf, &mq->page_list, list) {
+		mq_create->u.request.page[dmabuf->buffer_tag].addr_lo =
+			putPaddrLow(dmabuf->phys);
+		mq_create->u.request.page[dmabuf->buffer_tag].addr_hi =
+			putPaddrHigh(dmabuf->phys);
+	}
+}
+
+/**
  * lpfc_mq_create - Create a mailbox Queue on the HBA
  * @phba: HBA structure that indicates port to create a queue on.
  * @mq: The queue structure to use to create the mailbox queue.
+ * @cq: The completion queue to associate with this cq.
+ * @subtype: The queue's subtype.
  *
  * This function creates a mailbox queue, as detailed in @mq, on a port,
  * described by @phba by sending a MQ_CREATE mailbox command to the HBA.
@@ -9806,34 +10668,57 @@ out:
  * command to finish before continuing.
  *
  * On success this function will return a zero. If unable to allocate enough
- * memory this function will return ENOMEM. If the queue create mailbox command
- * fails this function will return ENXIO.
+ * memory this function will return -ENOMEM. If the queue create mailbox command
+ * fails this function will return -ENXIO.
  **/
-uint32_t
+int32_t
 lpfc_mq_create(struct lpfc_hba *phba, struct lpfc_queue *mq,
 	       struct lpfc_queue *cq, uint32_t subtype)
 {
 	struct lpfc_mbx_mq_create *mq_create;
+	struct lpfc_mbx_mq_create_ext *mq_create_ext;
 	struct lpfc_dmabuf *dmabuf;
 	LPFC_MBOXQ_t *mbox;
 	int rc, length, status = 0;
 	uint32_t shdr_status, shdr_add_status;
 	union lpfc_sli4_cfg_shdr *shdr;
+	uint32_t hw_page_size = phba->sli4_hba.pc_sli4_params.if_page_sz;
+
+	if (!phba->sli4_hba.pc_sli4_params.supported)
+		hw_page_size = SLI4_PAGE_SIZE;
 
 	mbox = mempool_alloc(phba->mbox_mem_pool, GFP_KERNEL);
 	if (!mbox)
 		return -ENOMEM;
-	length = (sizeof(struct lpfc_mbx_mq_create) -
+	length = (sizeof(struct lpfc_mbx_mq_create_ext) -
 		  sizeof(struct lpfc_sli4_cfg_mhdr));
 	lpfc_sli4_config(phba, mbox, LPFC_MBOX_SUBSYSTEM_COMMON,
-			 LPFC_MBOX_OPCODE_MQ_CREATE,
+			 LPFC_MBOX_OPCODE_MQ_CREATE_EXT,
 			 length, LPFC_SLI4_MBX_EMBED);
-	mq_create = &mbox->u.mqe.un.mq_create;
-	bf_set(lpfc_mbx_mq_create_num_pages, &mq_create->u.request,
-		    mq->page_count);
-	bf_set(lpfc_mq_context_cq_id, &mq_create->u.request.context,
-		    cq->queue_id);
-	bf_set(lpfc_mq_context_valid, &mq_create->u.request.context, 1);
+
+	mq_create_ext = &mbox->u.mqe.un.mq_create_ext;
+	shdr = (union lpfc_sli4_cfg_shdr *) &mq_create_ext->header.cfg_shdr;
+	bf_set(lpfc_mbx_mq_create_ext_num_pages,
+	       &mq_create_ext->u.request, mq->page_count);
+	bf_set(lpfc_mbx_mq_create_ext_async_evt_link,
+	       &mq_create_ext->u.request, 1);
+	bf_set(lpfc_mbx_mq_create_ext_async_evt_fip,
+	       &mq_create_ext->u.request, 1);
+	bf_set(lpfc_mbx_mq_create_ext_async_evt_group5,
+	       &mq_create_ext->u.request, 1);
+	bf_set(lpfc_mbx_mq_create_ext_async_evt_fc,
+	       &mq_create_ext->u.request, 1);
+	bf_set(lpfc_mbx_mq_create_ext_async_evt_sli,
+	       &mq_create_ext->u.request, 1);
+	bf_set(lpfc_mq_context_valid, &mq_create_ext->u.request.context, 1);
+	bf_set(lpfc_mbox_hdr_version, &shdr->request,
+	       phba->sli4_hba.pc_sli4_params.mqv);
+	if (phba->sli4_hba.pc_sli4_params.mqv == LPFC_Q_CREATE_VERSION_1)
+		bf_set(lpfc_mbx_mq_create_ext_cq_id, &mq_create_ext->u.request,
+		       cq->queue_id);
+	else
+		bf_set(lpfc_mq_context_cq_id, &mq_create_ext->u.request.context,
+		       cq->queue_id);
 	switch (mq->entry_count) {
 	default:
 		lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
@@ -9843,31 +10728,50 @@ lpfc_mq_create(struct lpfc_hba *phba, struct lpfc_queue *mq,
 			return -EINVAL;
 		/* otherwise default to smallest count (drop through) */
 	case 16:
-		bf_set(lpfc_mq_context_count, &mq_create->u.request.context,
-		       LPFC_MQ_CNT_16);
+		bf_set(lpfc_mq_context_ring_size,
+		       &mq_create_ext->u.request.context,
+		       LPFC_MQ_RING_SIZE_16);
 		break;
 	case 32:
-		bf_set(lpfc_mq_context_count, &mq_create->u.request.context,
-		       LPFC_MQ_CNT_32);
+		bf_set(lpfc_mq_context_ring_size,
+		       &mq_create_ext->u.request.context,
+		       LPFC_MQ_RING_SIZE_32);
 		break;
 	case 64:
-		bf_set(lpfc_mq_context_count, &mq_create->u.request.context,
-		       LPFC_MQ_CNT_64);
+		bf_set(lpfc_mq_context_ring_size,
+		       &mq_create_ext->u.request.context,
+		       LPFC_MQ_RING_SIZE_64);
 		break;
 	case 128:
-		bf_set(lpfc_mq_context_count, &mq_create->u.request.context,
-		       LPFC_MQ_CNT_128);
+		bf_set(lpfc_mq_context_ring_size,
+		       &mq_create_ext->u.request.context,
+		       LPFC_MQ_RING_SIZE_128);
 		break;
 	}
 	list_for_each_entry(dmabuf, &mq->page_list, list) {
-		mq_create->u.request.page[dmabuf->buffer_tag].addr_lo =
+		memset(dmabuf->virt, 0, hw_page_size);
+		mq_create_ext->u.request.page[dmabuf->buffer_tag].addr_lo =
 					putPaddrLow(dmabuf->phys);
-		mq_create->u.request.page[dmabuf->buffer_tag].addr_hi =
+		mq_create_ext->u.request.page[dmabuf->buffer_tag].addr_hi =
 					putPaddrHigh(dmabuf->phys);
 	}
 	rc = lpfc_sli_issue_mbox(phba, mbox, MBX_POLL);
+	mq->queue_id = bf_get(lpfc_mbx_mq_create_q_id,
+			      &mq_create_ext->u.response);
+	if (rc != MBX_SUCCESS) {
+		lpfc_printf_log(phba, KERN_INFO, LOG_INIT,
+				"2795 MQ_CREATE_EXT failed with "
+				"status x%x. Failback to MQ_CREATE.\n",
+				rc);
+		lpfc_mq_create_fb_init(phba, mq, mbox, cq);
+		mq_create = &mbox->u.mqe.un.mq_create;
+		rc = lpfc_sli_issue_mbox(phba, mbox, MBX_POLL);
+		shdr = (union lpfc_sli4_cfg_shdr *) &mq_create->header.cfg_shdr;
+		mq->queue_id = bf_get(lpfc_mbx_mq_create_q_id,
+				      &mq_create->u.response);
+	}
+
 	/* The IOCTL status is embedded in the mailbox subheader. */
-	shdr = (union lpfc_sli4_cfg_shdr *) &mq_create->header.cfg_shdr;
 	shdr_status = bf_get(lpfc_mbox_hdr_status, &shdr->response);
 	shdr_add_status = bf_get(lpfc_mbox_hdr_add_status, &shdr->response);
 	if (shdr_status || shdr_add_status || rc) {
@@ -9878,12 +10782,12 @@ lpfc_mq_create(struct lpfc_hba *phba, struct lpfc_queue *mq,
 		status = -ENXIO;
 		goto out;
 	}
-	mq->queue_id = bf_get(lpfc_mbx_mq_create_q_id, &mq_create->u.response);
 	if (mq->queue_id == 0xFFFF) {
 		status = -ENXIO;
 		goto out;
 	}
 	mq->type = LPFC_MQ;
+	mq->assoc_qid = cq->queue_id;
 	mq->subtype = subtype;
 	mq->host_index = 0;
 	mq->hba_index = 0;
@@ -9914,8 +10818,8 @@ out:
  * command to finish before continuing.
  *
  * On success this function will return a zero. If unable to allocate enough
- * memory this function will return ENOMEM. If the queue create mailbox command
- * fails this function will return ENXIO.
+ * memory this function will return -ENOMEM. If the queue create mailbox command
+ * fails this function will return -ENXIO.
  **/
 uint32_t
 lpfc_wq_create(struct lpfc_hba *phba, struct lpfc_queue *wq,
@@ -9927,6 +10831,11 @@ lpfc_wq_create(struct lpfc_hba *phba, struct lpfc_queue *wq,
 	int rc, length, status = 0;
 	uint32_t shdr_status, shdr_add_status;
 	union lpfc_sli4_cfg_shdr *shdr;
+	uint32_t hw_page_size = phba->sli4_hba.pc_sli4_params.if_page_sz;
+	struct dma_address *page;
+
+	if (!phba->sli4_hba.pc_sli4_params.supported)
+		hw_page_size = SLI4_PAGE_SIZE;
 
 	mbox = mempool_alloc(phba->mbox_mem_pool, GFP_KERNEL);
 	if (!mbox)
@@ -9937,19 +10846,42 @@ lpfc_wq_create(struct lpfc_hba *phba, struct lpfc_queue *wq,
 			 LPFC_MBOX_OPCODE_FCOE_WQ_CREATE,
 			 length, LPFC_SLI4_MBX_EMBED);
 	wq_create = &mbox->u.mqe.un.wq_create;
+	shdr = (union lpfc_sli4_cfg_shdr *) &wq_create->header.cfg_shdr;
 	bf_set(lpfc_mbx_wq_create_num_pages, &wq_create->u.request,
 		    wq->page_count);
 	bf_set(lpfc_mbx_wq_create_cq_id, &wq_create->u.request,
 		    cq->queue_id);
+	bf_set(lpfc_mbox_hdr_version, &shdr->request,
+	       phba->sli4_hba.pc_sli4_params.wqv);
+	if (phba->sli4_hba.pc_sli4_params.wqv == LPFC_Q_CREATE_VERSION_1) {
+		bf_set(lpfc_mbx_wq_create_wqe_count, &wq_create->u.request_1,
+		       wq->entry_count);
+		switch (wq->entry_size) {
+		default:
+		case 64:
+			bf_set(lpfc_mbx_wq_create_wqe_size,
+			       &wq_create->u.request_1,
+			       LPFC_WQ_WQE_SIZE_64);
+			break;
+		case 128:
+			bf_set(lpfc_mbx_wq_create_wqe_size,
+			       &wq_create->u.request_1,
+			       LPFC_WQ_WQE_SIZE_128);
+			break;
+		}
+		bf_set(lpfc_mbx_wq_create_page_size, &wq_create->u.request_1,
+		       (PAGE_SIZE/SLI4_PAGE_SIZE));
+		page = wq_create->u.request_1.page;
+	} else {
+		page = wq_create->u.request.page;
+	}
 	list_for_each_entry(dmabuf, &wq->page_list, list) {
-		wq_create->u.request.page[dmabuf->buffer_tag].addr_lo =
-					putPaddrLow(dmabuf->phys);
-		wq_create->u.request.page[dmabuf->buffer_tag].addr_hi =
-					putPaddrHigh(dmabuf->phys);
+		memset(dmabuf->virt, 0, hw_page_size);
+		page[dmabuf->buffer_tag].addr_lo = putPaddrLow(dmabuf->phys);
+		page[dmabuf->buffer_tag].addr_hi = putPaddrHigh(dmabuf->phys);
 	}
 	rc = lpfc_sli_issue_mbox(phba, mbox, MBX_POLL);
 	/* The IOCTL status is embedded in the mailbox subheader. */
-	shdr = (union lpfc_sli4_cfg_shdr *) &wq_create->header.cfg_shdr;
 	shdr_status = bf_get(lpfc_mbox_hdr_status, &shdr->response);
 	shdr_add_status = bf_get(lpfc_mbox_hdr_add_status, &shdr->response);
 	if (shdr_status || shdr_add_status || rc) {
@@ -9966,6 +10898,7 @@ lpfc_wq_create(struct lpfc_hba *phba, struct lpfc_queue *wq,
 		goto out;
 	}
 	wq->type = LPFC_WQ;
+	wq->assoc_qid = cq->queue_id;
 	wq->subtype = subtype;
 	wq->host_index = 0;
 	wq->hba_index = 0;
@@ -9997,8 +10930,8 @@ out:
  * mailbox command to finish before continuing.
  *
  * On success this function will return a zero. If unable to allocate enough
- * memory this function will return ENOMEM. If the queue create mailbox command
- * fails this function will return ENXIO.
+ * memory this function will return -ENOMEM. If the queue create mailbox command
+ * fails this function will return -ENXIO.
  **/
 uint32_t
 lpfc_rq_create(struct lpfc_hba *phba, struct lpfc_queue *hrq,
@@ -10010,6 +10943,10 @@ lpfc_rq_create(struct lpfc_hba *phba, struct lpfc_queue *hrq,
 	int rc, length, status = 0;
 	uint32_t shdr_status, shdr_add_status;
 	union lpfc_sli4_cfg_shdr *shdr;
+	uint32_t hw_page_size = phba->sli4_hba.pc_sli4_params.if_page_sz;
+
+	if (!phba->sli4_hba.pc_sli4_params.supported)
+		hw_page_size = SLI4_PAGE_SIZE;
 
 	if (hrq->entry_count != drq->entry_count)
 		return -EINVAL;
@@ -10022,38 +10959,53 @@ lpfc_rq_create(struct lpfc_hba *phba, struct lpfc_queue *hrq,
 			 LPFC_MBOX_OPCODE_FCOE_RQ_CREATE,
 			 length, LPFC_SLI4_MBX_EMBED);
 	rq_create = &mbox->u.mqe.un.rq_create;
-	switch (hrq->entry_count) {
-	default:
-		lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
-				"2535 Unsupported RQ count. (%d)\n",
-				hrq->entry_count);
-		if (hrq->entry_count < 512)
-			return -EINVAL;
-		/* otherwise default to smallest count (drop through) */
-	case 512:
-		bf_set(lpfc_rq_context_rq_size, &rq_create->u.request.context,
-		       LPFC_RQ_RING_SIZE_512);
-		break;
-	case 1024:
-		bf_set(lpfc_rq_context_rq_size, &rq_create->u.request.context,
-		       LPFC_RQ_RING_SIZE_1024);
-		break;
-	case 2048:
-		bf_set(lpfc_rq_context_rq_size, &rq_create->u.request.context,
-		       LPFC_RQ_RING_SIZE_2048);
-		break;
-	case 4096:
-		bf_set(lpfc_rq_context_rq_size, &rq_create->u.request.context,
-		       LPFC_RQ_RING_SIZE_4096);
-		break;
+	shdr = (union lpfc_sli4_cfg_shdr *) &rq_create->header.cfg_shdr;
+	bf_set(lpfc_mbox_hdr_version, &shdr->request,
+	       phba->sli4_hba.pc_sli4_params.rqv);
+	if (phba->sli4_hba.pc_sli4_params.rqv == LPFC_Q_CREATE_VERSION_1) {
+		bf_set(lpfc_rq_context_rqe_count_1,
+		       &rq_create->u.request.context,
+		       hrq->entry_count);
+		rq_create->u.request.context.buffer_size = LPFC_HDR_BUF_SIZE;
+	} else {
+		switch (hrq->entry_count) {
+		default:
+			lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
+					"2535 Unsupported RQ count. (%d)\n",
+					hrq->entry_count);
+			if (hrq->entry_count < 512)
+				return -EINVAL;
+			/* otherwise default to smallest count (drop through) */
+		case 512:
+			bf_set(lpfc_rq_context_rqe_count,
+			       &rq_create->u.request.context,
+			       LPFC_RQ_RING_SIZE_512);
+			break;
+		case 1024:
+			bf_set(lpfc_rq_context_rqe_count,
+			       &rq_create->u.request.context,
+			       LPFC_RQ_RING_SIZE_1024);
+			break;
+		case 2048:
+			bf_set(lpfc_rq_context_rqe_count,
+			       &rq_create->u.request.context,
+			       LPFC_RQ_RING_SIZE_2048);
+			break;
+		case 4096:
+			bf_set(lpfc_rq_context_rqe_count,
+			       &rq_create->u.request.context,
+			       LPFC_RQ_RING_SIZE_4096);
+			break;
+		}
+		bf_set(lpfc_rq_context_buf_size, &rq_create->u.request.context,
+		       LPFC_HDR_BUF_SIZE);
 	}
 	bf_set(lpfc_rq_context_cq_id, &rq_create->u.request.context,
 	       cq->queue_id);
 	bf_set(lpfc_mbx_rq_create_num_pages, &rq_create->u.request,
 	       hrq->page_count);
-	bf_set(lpfc_rq_context_buf_size, &rq_create->u.request.context,
-	       LPFC_HDR_BUF_SIZE);
 	list_for_each_entry(dmabuf, &hrq->page_list, list) {
+		memset(dmabuf->virt, 0, hw_page_size);
 		rq_create->u.request.page[dmabuf->buffer_tag].addr_lo =
 					putPaddrLow(dmabuf->phys);
 		rq_create->u.request.page[dmabuf->buffer_tag].addr_hi =
@@ -10061,7 +11013,6 @@ lpfc_rq_create(struct lpfc_hba *phba, struct lpfc_queue *hrq,
 	}
 	rc = lpfc_sli_issue_mbox(phba, mbox, MBX_POLL);
 	/* The IOCTL status is embedded in the mailbox subheader. */
-	shdr = (union lpfc_sli4_cfg_shdr *) &rq_create->header.cfg_shdr;
 	shdr_status = bf_get(lpfc_mbox_hdr_status, &shdr->response);
 	shdr_add_status = bf_get(lpfc_mbox_hdr_add_status, &shdr->response);
 	if (shdr_status || shdr_add_status || rc) {
@@ -10078,6 +11029,7 @@ lpfc_rq_create(struct lpfc_hba *phba, struct lpfc_queue *hrq,
 		goto out;
 	}
 	hrq->type = LPFC_HRQ;
+	hrq->assoc_qid = cq->queue_id;
 	hrq->subtype = subtype;
 	hrq->host_index = 0;
 	hrq->hba_index = 0;
@@ -10086,37 +11038,50 @@ lpfc_rq_create(struct lpfc_hba *phba, struct lpfc_queue *hrq,
 	lpfc_sli4_config(phba, mbox, LPFC_MBOX_SUBSYSTEM_FCOE,
 			 LPFC_MBOX_OPCODE_FCOE_RQ_CREATE,
 			 length, LPFC_SLI4_MBX_EMBED);
-	switch (drq->entry_count) {
-	default:
-		lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
-				"2536 Unsupported RQ count. (%d)\n",
-				drq->entry_count);
-		if (drq->entry_count < 512)
-			return -EINVAL;
-		/* otherwise default to smallest count (drop through) */
-	case 512:
-		bf_set(lpfc_rq_context_rq_size, &rq_create->u.request.context,
-		       LPFC_RQ_RING_SIZE_512);
-		break;
-	case 1024:
-		bf_set(lpfc_rq_context_rq_size, &rq_create->u.request.context,
-		       LPFC_RQ_RING_SIZE_1024);
-		break;
-	case 2048:
-		bf_set(lpfc_rq_context_rq_size, &rq_create->u.request.context,
-		       LPFC_RQ_RING_SIZE_2048);
-		break;
-	case 4096:
-		bf_set(lpfc_rq_context_rq_size, &rq_create->u.request.context,
-		       LPFC_RQ_RING_SIZE_4096);
-		break;
+	bf_set(lpfc_mbox_hdr_version, &shdr->request,
+	       phba->sli4_hba.pc_sli4_params.rqv);
+	if (phba->sli4_hba.pc_sli4_params.rqv == LPFC_Q_CREATE_VERSION_1) {
+		bf_set(lpfc_rq_context_rqe_count_1,
+		       &rq_create->u.request.context,
+		       hrq->entry_count);
+		rq_create->u.request.context.buffer_size = LPFC_DATA_BUF_SIZE;
+	} else {
+		switch (drq->entry_count) {
+		default:
+			lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
+					"2536 Unsupported RQ count. (%d)\n",
+					drq->entry_count);
+			if (drq->entry_count < 512)
+				return -EINVAL;
+			/* otherwise default to smallest count (drop through) */
+		case 512:
+			bf_set(lpfc_rq_context_rqe_count,
+			       &rq_create->u.request.context,
+			       LPFC_RQ_RING_SIZE_512);
+			break;
+		case 1024:
+			bf_set(lpfc_rq_context_rqe_count,
+			       &rq_create->u.request.context,
+			       LPFC_RQ_RING_SIZE_1024);
+			break;
+		case 2048:
+			bf_set(lpfc_rq_context_rqe_count,
+			       &rq_create->u.request.context,
+			       LPFC_RQ_RING_SIZE_2048);
+			break;
+		case 4096:
+			bf_set(lpfc_rq_context_rqe_count,
+			       &rq_create->u.request.context,
+			       LPFC_RQ_RING_SIZE_4096);
+			break;
+		}
+		bf_set(lpfc_rq_context_buf_size, &rq_create->u.request.context,
+		       LPFC_DATA_BUF_SIZE);
 	}
 	bf_set(lpfc_rq_context_cq_id, &rq_create->u.request.context,
 	       cq->queue_id);
 	bf_set(lpfc_mbx_rq_create_num_pages, &rq_create->u.request,
 	       drq->page_count);
-	bf_set(lpfc_rq_context_buf_size, &rq_create->u.request.context,
-	       LPFC_DATA_BUF_SIZE);
 	list_for_each_entry(dmabuf, &drq->page_list, list) {
 		rq_create->u.request.page[dmabuf->buffer_tag].addr_lo =
 					putPaddrLow(dmabuf->phys);
@@ -10138,6 +11103,7 @@ lpfc_rq_create(struct lpfc_hba *phba, struct lpfc_queue *hrq,
 		goto out;
 	}
 	drq->type = LPFC_DRQ;
+	drq->assoc_qid = cq->queue_id;
 	drq->subtype = subtype;
 	drq->host_index = 0;
 	drq->hba_index = 0;
@@ -10161,7 +11127,7 @@ out:
  * The @eq struct is used to get the queue ID of the queue to destroy.
  *
  * On success this function will return a zero. If the queue destroy mailbox
- * command fails this function will return ENXIO.
+ * command fails this function will return -ENXIO.
  **/
 uint32_t
 lpfc_eq_destroy(struct lpfc_hba *phba, struct lpfc_queue *eq)
@@ -10216,7 +11182,7 @@ lpfc_eq_destroy(struct lpfc_hba *phba, struct lpfc_queue *eq)
  * The @cq struct is used to get the queue ID of the queue to destroy.
  *
  * On success this function will return a zero. If the queue destroy mailbox
- * command fails this function will return ENXIO.
+ * command fails this function will return -ENXIO.
  **/
 uint32_t
 lpfc_cq_destroy(struct lpfc_hba *phba, struct lpfc_queue *cq)
@@ -10269,7 +11235,7 @@ lpfc_cq_destroy(struct lpfc_hba *phba, struct lpfc_queue *cq)
  * The @mq struct is used to get the queue ID of the queue to destroy.
  *
  * On success this function will return a zero. If the queue destroy mailbox
- * command fails this function will return ENXIO.
+ * command fails this function will return -ENXIO.
  **/
 uint32_t
 lpfc_mq_destroy(struct lpfc_hba *phba, struct lpfc_queue *mq)
@@ -10322,7 +11288,7 @@ lpfc_mq_destroy(struct lpfc_hba *phba, struct lpfc_queue *mq)
  * The @wq struct is used to get the queue ID of the queue to destroy.
  *
  * On success this function will return a zero. If the queue destroy mailbox
- * command fails this function will return ENXIO.
+ * command fails this function will return -ENXIO.
  **/
 uint32_t
 lpfc_wq_destroy(struct lpfc_hba *phba, struct lpfc_queue *wq)
@@ -10374,7 +11340,7 @@ lpfc_wq_destroy(struct lpfc_hba *phba, struct lpfc_queue *wq)
  * The @rq struct is used to get the queue ID of the queue to destroy.
  *
  * On success this function will return a zero. If the queue destroy mailbox
- * command fails this function will return ENXIO.
+ * command fails this function will return -ENXIO.
  **/
 uint32_t
 lpfc_rq_destroy(struct lpfc_hba *phba, struct lpfc_queue *hrq,
@@ -10391,7 +11357,7 @@ lpfc_rq_destroy(struct lpfc_hba *phba, struct lpfc_queue *hrq,
 	if (!mbox)
 		return -ENOMEM;
 	length = (sizeof(struct lpfc_mbx_rq_destroy) -
-		  sizeof(struct mbox_header));
+		  sizeof(struct lpfc_sli4_cfg_mhdr));
 	lpfc_sli4_config(phba, mbox, LPFC_MBOX_SUBSYSTEM_FCOE,
 			 LPFC_MBOX_OPCODE_FCOE_RQ_DESTROY,
 			 length, LPFC_SLI4_MBX_EMBED);
@@ -10481,7 +11447,7 @@ lpfc_sli4_post_sgl(struct lpfc_hba *phba,
 	lpfc_sli4_config(phba, mbox, LPFC_MBOX_SUBSYSTEM_FCOE,
 			LPFC_MBOX_OPCODE_FCOE_POST_SGL_PAGES,
 			sizeof(struct lpfc_mbx_post_sgl_pages) -
-			sizeof(struct mbox_header), LPFC_SLI4_MBX_EMBED);
+			sizeof(struct lpfc_sli4_cfg_mhdr), LPFC_SLI4_MBX_EMBED);
 
 	post_sgl_pages = (struct lpfc_mbx_post_sgl_pages *)
 				&mbox->u.mqe.un.post_sgl_pages;
@@ -10515,51 +11481,6 @@ lpfc_sli4_post_sgl(struct lpfc_hba *phba,
 		rc = -ENXIO;
 	}
 	return 0;
-}
-/**
- * lpfc_sli4_remove_all_sgl_pages - Post scatter gather list for an XRI to HBA
- * @phba: The virtual port for which this call being executed.
- *
- * This routine will remove all of the sgl pages registered with the hba.
- *
- * Return codes:
- * 	0 - Success
- * 	-ENXIO, -ENOMEM - Failure
- **/
-int
-lpfc_sli4_remove_all_sgl_pages(struct lpfc_hba *phba)
-{
-	LPFC_MBOXQ_t *mbox;
-	int rc;
-	uint32_t shdr_status, shdr_add_status;
-	union lpfc_sli4_cfg_shdr *shdr;
-
-	mbox = mempool_alloc(phba->mbox_mem_pool, GFP_KERNEL);
-	if (!mbox)
-		return -ENOMEM;
-
-	lpfc_sli4_config(phba, mbox, LPFC_MBOX_SUBSYSTEM_FCOE,
-			LPFC_MBOX_OPCODE_FCOE_REMOVE_SGL_PAGES, 0,
-			LPFC_SLI4_MBX_EMBED);
-	if (!phba->sli4_hba.intr_enable)
-		rc = lpfc_sli_issue_mbox(phba, mbox, MBX_POLL);
-	else
-		rc = lpfc_sli_issue_mbox_wait(phba, mbox, LPFC_MBOX_TMO);
-	/* The IOCTL status is embedded in the mailbox subheader. */
-	shdr = (union lpfc_sli4_cfg_shdr *)
-		&mbox->u.mqe.un.sli4_config.header.cfg_shdr;
-	shdr_status = bf_get(lpfc_mbox_hdr_status, &shdr->response);
-	shdr_add_status = bf_get(lpfc_mbox_hdr_add_status, &shdr->response);
-	if (rc != MBX_TIMEOUT)
-		mempool_free(mbox, phba->mbox_mem_pool);
-	if (shdr_status || shdr_add_status || rc) {
-		lpfc_printf_log(phba, KERN_ERR, LOG_INIT,
-				"2512 REMOVE_ALL_SGL_PAGES mailbox failed with "
-				"status x%x add_status x%x, mbx status x%x\n",
-				shdr_status, shdr_add_status, rc);
-		rc = -ENXIO;
-	}
-	return rc;
 }
 
 /**
@@ -10626,7 +11547,7 @@ lpfc_sli4_post_sgl_list(struct lpfc_hba *phba)
 
 	reqlen = els_xri_cnt * sizeof(struct sgl_page_pairs) +
 		 sizeof(union lpfc_sli4_cfg_shdr) + sizeof(uint32_t);
-	if (reqlen > PAGE_SIZE) {
+	if (reqlen > SLI4_PAGE_SIZE) {
 		lpfc_printf_log(phba, KERN_WARNING, LOG_INIT,
 				"2559 Block sgl registration required DMA "
 				"size (%d) great than a page\n", reqlen);
@@ -10732,7 +11653,7 @@ lpfc_sli4_post_scsi_sgl_block(struct lpfc_hba *phba, struct list_head *sblist,
 	/* Calculate the requested length of the dma memory */
 	reqlen = cnt * sizeof(struct sgl_page_pairs) +
 		 sizeof(union lpfc_sli4_cfg_shdr) + sizeof(uint32_t);
-	if (reqlen > PAGE_SIZE) {
+	if (reqlen > SLI4_PAGE_SIZE) {
 		lpfc_printf_log(phba, KERN_WARNING, LOG_INIT,
 				"0217 Block sgl registration required DMA "
 				"size (%d) great than a page\n", reqlen);
@@ -10825,9 +11746,11 @@ lpfc_sli4_post_scsi_sgl_block(struct lpfc_hba *phba, struct list_head *sblist,
 static int
 lpfc_fc_frame_check(struct lpfc_hba *phba, struct fc_frame_header *fc_hdr)
 {
-	char *rctl_names[] = FC_RCTL_NAMES_INIT;
+	/*  make rctl_names static to save stack space */
+	static char *rctl_names[] = FC_RCTL_NAMES_INIT;
 	char *type_names[] = FC_TYPE_NAMES_INIT;
 	struct fc_vft_header *fc_vft_hdr;
+	uint32_t *header = (uint32_t *) fc_hdr;
 
 	switch (fc_hdr->fh_r_ctl) {
 	case FC_RCTL_DD_UNCAT:		/* uncategorized information */
@@ -10876,10 +11799,15 @@ lpfc_fc_frame_check(struct lpfc_hba *phba, struct fc_frame_header *fc_hdr)
 	default:
 		goto drop;
 	}
+
 	lpfc_printf_log(phba, KERN_INFO, LOG_ELS,
-			"2538 Received frame rctl:%s type:%s\n",
+			"2538 Received frame rctl:%s type:%s "
+			"Frame Data:%08x %08x %08x %08x %08x %08x\n",
 			rctl_names[fc_hdr->fh_r_ctl],
-			type_names[fc_hdr->fh_type]);
+			type_names[fc_hdr->fh_type],
+			be32_to_cpu(header[0]), be32_to_cpu(header[1]),
+			be32_to_cpu(header[2]), be32_to_cpu(header[3]),
+			be32_to_cpu(header[4]), be32_to_cpu(header[5]));
 	return 0;
 drop:
 	lpfc_printf_log(phba, KERN_WARNING, LOG_ELS,
@@ -11176,17 +12104,17 @@ lpfc_sli4_abort_partial_seq(struct lpfc_vport *vport,
 }
 
 /**
- * lpfc_sli4_seq_abort_acc_cmpl - Accept seq abort iocb complete handler
+ * lpfc_sli4_seq_abort_rsp_cmpl - BLS ABORT RSP seq abort iocb complete handler
  * @phba: Pointer to HBA context object.
  * @cmd_iocbq: pointer to the command iocbq structure.
  * @rsp_iocbq: pointer to the response iocbq structure.
  *
- * This function handles the sequence abort accept iocb command complete
+ * This function handles the sequence abort response iocb command complete
  * event. It properly releases the memory allocated to the sequence abort
  * accept iocb.
  **/
 static void
-lpfc_sli4_seq_abort_acc_cmpl(struct lpfc_hba *phba,
+lpfc_sli4_seq_abort_rsp_cmpl(struct lpfc_hba *phba,
 			     struct lpfc_iocbq *cmd_iocbq,
 			     struct lpfc_iocbq *rsp_iocbq)
 {
@@ -11195,15 +12123,15 @@ lpfc_sli4_seq_abort_acc_cmpl(struct lpfc_hba *phba,
 }
 
 /**
- * lpfc_sli4_seq_abort_acc - Accept sequence abort
+ * lpfc_sli4_seq_abort_rsp - bls rsp to sequence abort
  * @phba: Pointer to HBA context object.
  * @fc_hdr: pointer to a FC frame header.
  *
- * This function sends a basic accept to a previous unsol sequence abort
+ * This function sends a basic response to a previous unsol sequence abort
  * event after aborting the sequence handling.
  **/
 static void
-lpfc_sli4_seq_abort_acc(struct lpfc_hba *phba,
+lpfc_sli4_seq_abort_rsp(struct lpfc_hba *phba,
 			struct fc_frame_header *fc_hdr)
 {
 	struct lpfc_iocbq *ctiocb = NULL;
@@ -11211,6 +12139,7 @@ lpfc_sli4_seq_abort_acc(struct lpfc_hba *phba,
 	uint16_t oxid, rxid;
 	uint32_t sid, fctl;
 	IOCB_t *icmd;
+	int rc;
 
 	if (!lpfc_is_link_up(phba))
 		return;
@@ -11226,8 +12155,12 @@ lpfc_sli4_seq_abort_acc(struct lpfc_hba *phba,
 				"SID:x%x\n", oxid, sid);
 		return;
 	}
+	if (rxid >= phba->sli4_hba.max_cfg_param.xri_base
+		&& rxid <= (phba->sli4_hba.max_cfg_param.max_xri
+		+ phba->sli4_hba.max_cfg_param.xri_base))
+		lpfc_set_rrq_active(phba, ndlp, rxid, oxid, 0);
 
-	/* Allocate buffer for acc iocb */
+	/* Allocate buffer for rsp iocb */
 	ctiocb = lpfc_sli_get_iocbq(phba);
 	if (!ctiocb)
 		return;
@@ -11248,35 +12181,58 @@ lpfc_sli4_seq_abort_acc(struct lpfc_hba *phba,
 	icmd->ulpLe = 1;
 	icmd->ulpClass = CLASS3;
 	icmd->ulpContext = ndlp->nlp_rpi;
+	ctiocb->context1 = ndlp;
 
 	ctiocb->iocb_cmpl = NULL;
 	ctiocb->vport = phba->pport;
-	ctiocb->iocb_cmpl = lpfc_sli4_seq_abort_acc_cmpl;
+	ctiocb->iocb_cmpl = lpfc_sli4_seq_abort_rsp_cmpl;
+	ctiocb->sli4_xritag = NO_XRI;
+
+	/* If the oxid maps to the FCP XRI range or if it is out of range,
+	 * send a BLS_RJT.  The driver no longer has that exchange.
+	 * Override the IOCB for a BA_RJT.
+	 */
+	if (oxid > (phba->sli4_hba.max_cfg_param.max_xri +
+		    phba->sli4_hba.max_cfg_param.xri_base) ||
+	    oxid > (lpfc_sli4_get_els_iocb_cnt(phba) +
+		    phba->sli4_hba.max_cfg_param.xri_base)) {
+		icmd->un.xseq64.w5.hcsw.Rctl = FC_RCTL_BA_RJT;
+		bf_set(lpfc_vndr_code, &icmd->un.bls_rsp, 0);
+		bf_set(lpfc_rsn_expln, &icmd->un.bls_rsp, FC_BA_RJT_INV_XID);
+		bf_set(lpfc_rsn_code, &icmd->un.bls_rsp, FC_BA_RJT_UNABLE);
+	}
 
 	if (fctl & FC_FC_EX_CTX) {
 		/* ABTS sent by responder to CT exchange, construction
 		 * of BA_ACC will use OX_ID from ABTS for the XRI_TAG
 		 * field and RX_ID from ABTS for RX_ID field.
 		 */
-		bf_set(lpfc_abts_orig, &icmd->un.bls_acc, LPFC_ABTS_UNSOL_RSP);
-		bf_set(lpfc_abts_rxid, &icmd->un.bls_acc, rxid);
-		ctiocb->sli4_xritag = oxid;
+		bf_set(lpfc_abts_orig, &icmd->un.bls_rsp, LPFC_ABTS_UNSOL_RSP);
+		bf_set(lpfc_abts_rxid, &icmd->un.bls_rsp, rxid);
 	} else {
 		/* ABTS sent by initiator to CT exchange, construction
 		 * of BA_ACC will need to allocate a new XRI as for the
 		 * XRI_TAG and RX_ID fields.
 		 */
-		bf_set(lpfc_abts_orig, &icmd->un.bls_acc, LPFC_ABTS_UNSOL_INT);
-		bf_set(lpfc_abts_rxid, &icmd->un.bls_acc, NO_XRI);
-		ctiocb->sli4_xritag = NO_XRI;
+		bf_set(lpfc_abts_orig, &icmd->un.bls_rsp, LPFC_ABTS_UNSOL_INT);
+		bf_set(lpfc_abts_rxid, &icmd->un.bls_rsp, NO_XRI);
 	}
-	bf_set(lpfc_abts_oxid, &icmd->un.bls_acc, oxid);
+	bf_set(lpfc_abts_oxid, &icmd->un.bls_rsp, oxid);
 
-	/* Xmit CT abts accept on exchange <xid> */
+	/* Xmit CT abts response on exchange <xid> */
 	lpfc_printf_log(phba, KERN_INFO, LOG_ELS,
-			"1200 Xmit CT ABTS ACC on exchange x%x Data: x%x\n",
-			CMD_XMIT_BLS_RSP64_CX, phba->link_state);
-	lpfc_sli_issue_iocb(phba, LPFC_ELS_RING, ctiocb, 0);
+			"1200 Send BLS cmd x%x on oxid x%x Data: x%x\n",
+			icmd->un.xseq64.w5.hcsw.Rctl, oxid, phba->link_state);
+
+	rc = lpfc_sli_issue_iocb(phba, LPFC_ELS_RING, ctiocb, 0);
+	if (rc == IOCB_ERROR) {
+		lpfc_printf_log(phba, KERN_ERR, LOG_ELS,
+				"2925 Failed to issue CT ABTS RSP x%x on "
+				"xri x%x, Data x%x\n",
+				icmd->un.xseq64.w5.hcsw.Rctl, oxid,
+				phba->link_state);
+		lpfc_sli_release_iocbq(phba, ctiocb);
+	}
 }
 
 /**
@@ -11324,7 +12280,7 @@ lpfc_sli4_handle_unsol_abort(struct lpfc_vport *vport,
 			lpfc_in_buf_free(phba, &dmabuf->dbuf);
 	}
 	/* Send basic accept (BA_ACC) to the abort requester */
-	lpfc_sli4_seq_abort_acc(phba, &fc_hdr);
+	lpfc_sli4_seq_abort_rsp(phba, &fc_hdr);
 }
 
 /**
@@ -11568,8 +12524,8 @@ lpfc_sli4_handle_received_buffer(struct lpfc_hba *phba,
  *
  * This routine is invoked to post rpi header templates to the
  * HBA consistent with the SLI-4 interface spec.  This routine
- * posts a PAGE_SIZE memory region to the port to hold up to
- * PAGE_SIZE modulo 64 rpi context headers.
+ * posts a SLI4_PAGE_SIZE memory region to the port to hold up to
+ * SLI4_PAGE_SIZE modulo 64 rpi context headers.
  *
  * This routine does not require any locks.  It's usage is expected
  * to be driver load or reset recovery when the driver is
@@ -11577,7 +12533,7 @@ lpfc_sli4_handle_received_buffer(struct lpfc_hba *phba,
  *
  * Return codes
  * 	0 - successful
- *      EIO - The mailbox failed to complete successfully.
+ *      -EIO - The mailbox failed to complete successfully.
  * 	When this error occurs, the driver is not guaranteed
  *	to have any rpi regions posted to the device and
  *	must either attempt to repost the regions or take a
@@ -11615,8 +12571,8 @@ lpfc_sli4_post_all_rpi_hdrs(struct lpfc_hba *phba)
  *
  * Return codes
  * 	0 - successful
- * 	ENOMEM - No available memory
- *      EIO - The mailbox failed to complete successfully.
+ * 	-ENOMEM - No available memory
+ *      -EIO - The mailbox failed to complete successfully.
  **/
 int
 lpfc_sli4_post_rpi_hdr(struct lpfc_hba *phba, struct lpfc_rpi_hdr *rpi_page)
@@ -11643,7 +12599,8 @@ lpfc_sli4_post_rpi_hdr(struct lpfc_hba *phba, struct lpfc_rpi_hdr *rpi_page)
 	lpfc_sli4_config(phba, mboxq, LPFC_MBOX_SUBSYSTEM_FCOE,
 			 LPFC_MBOX_OPCODE_FCOE_POST_HDR_TEMPLATE,
 			 sizeof(struct lpfc_mbx_post_hdr_tmpl) -
-			 sizeof(struct mbox_header), LPFC_SLI4_MBX_EMBED);
+			 sizeof(struct lpfc_sli4_cfg_mhdr),
+			 LPFC_SLI4_MBX_EMBED);
 	bf_set(lpfc_mbx_post_hdr_tmpl_page_cnt,
 	       hdr_tmpl, rpi_page->page_count);
 	bf_set(lpfc_mbx_post_hdr_tmpl_rpi_offset, hdr_tmpl,
@@ -11672,8 +12629,8 @@ lpfc_sli4_post_rpi_hdr(struct lpfc_hba *phba, struct lpfc_rpi_hdr *rpi_page)
  *
  * This routine is invoked to post rpi header templates to the
  * HBA consistent with the SLI-4 interface spec.  This routine
- * posts a PAGE_SIZE memory region to the port to hold up to
- * PAGE_SIZE modulo 64 rpi context headers.
+ * posts a SLI4_PAGE_SIZE memory region to the port to hold up to
+ * SLI4_PAGE_SIZE modulo 64 rpi context headers.
  *
  * Returns
  * 	A nonzero rpi defined as rpi_base <= rpi < max_rpi if successful
@@ -11746,12 +12703,26 @@ lpfc_sli4_alloc_rpi(struct lpfc_hba *phba)
  * available rpis maintained by the driver.
  **/
 void
+__lpfc_sli4_free_rpi(struct lpfc_hba *phba, int rpi)
+{
+	if (test_and_clear_bit(rpi, phba->sli4_hba.rpi_bmask)) {
+		phba->sli4_hba.rpi_count--;
+		phba->sli4_hba.max_cfg_param.rpi_used--;
+	}
+}
+
+/**
+ * lpfc_sli4_free_rpi - Release an rpi for reuse.
+ * @phba: pointer to lpfc hba data structure.
+ *
+ * This routine is invoked to release an rpi to the pool of
+ * available rpis maintained by the driver.
+ **/
+void
 lpfc_sli4_free_rpi(struct lpfc_hba *phba, int rpi)
 {
 	spin_lock_irq(&phba->hbalock);
-	clear_bit(rpi, phba->sli4_hba.rpi_bmask);
-	phba->sli4_hba.rpi_count--;
-	phba->sli4_hba.max_cfg_param.rpi_used--;
+	__lpfc_sli4_free_rpi(phba, rpi);
 	spin_unlock_irq(&phba->hbalock);
 }
 
@@ -11803,42 +12774,37 @@ lpfc_sli4_resume_rpi(struct lpfc_nodelist *ndlp)
 
 /**
  * lpfc_sli4_init_vpi - Initialize a vpi with the port
- * @phba: pointer to lpfc hba data structure.
- * @vpi: vpi value to activate with the port.
+ * @vport: Pointer to the vport for which the vpi is being initialized
  *
- * This routine is invoked to activate a vpi with the
- * port when the host intends to use vports with a
- * nonzero vpi.
+ * This routine is invoked to activate a vpi with the port.
  *
  * Returns:
  *    0 success
  *    -Evalue otherwise
  **/
 int
-lpfc_sli4_init_vpi(struct lpfc_hba *phba, uint16_t vpi)
+lpfc_sli4_init_vpi(struct lpfc_vport *vport)
 {
 	LPFC_MBOXQ_t *mboxq;
 	int rc = 0;
 	int retval = MBX_SUCCESS;
 	uint32_t mbox_tmo;
-
-	if (vpi == 0)
-		return -EINVAL;
+	struct lpfc_hba *phba = vport->phba;
 	mboxq = mempool_alloc(phba->mbox_mem_pool, GFP_KERNEL);
 	if (!mboxq)
 		return -ENOMEM;
-	lpfc_init_vpi(phba, mboxq, vpi);
+	lpfc_init_vpi(phba, mboxq, vport->vpi);
 	mbox_tmo = lpfc_mbox_tmo_val(phba, MBX_INIT_VPI);
 	rc = lpfc_sli_issue_mbox_wait(phba, mboxq, mbox_tmo);
 	if (rc != MBX_SUCCESS) {
-		lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
+		lpfc_printf_vlog(vport, KERN_ERR, LOG_SLI,
 				"2022 INIT VPI Mailbox failed "
 				"status %d, mbxStatus x%x\n", rc,
 				bf_get(lpfc_mqe_status, &mboxq->u.mqe));
 		retval = -EIO;
 	}
 	if (rc != MBX_TIMEOUT)
-		mempool_free(mboxq, phba->mbox_mem_pool);
+		mempool_free(mboxq, vport->phba->mbox_mem_pool);
 
 	return retval;
 }
@@ -12005,7 +12971,7 @@ lpfc_sli4_build_dflt_fcf_record(struct lpfc_hba *phba,
  * record and processing it one at a time starting from the @fcf_index
  * for initial FCF discovery or fast FCF failover rediscovery.
  *
- * Return 0 if the mailbox command is submitted sucessfully, none 0
+ * Return 0 if the mailbox command is submitted successfully, none 0
  * otherwise.
  **/
 int
@@ -12032,40 +12998,41 @@ lpfc_sli4_fcf_scan_read_fcf_rec(struct lpfc_hba *phba, uint16_t fcf_index)
 	/* Issue the mailbox command asynchronously */
 	mboxq->vport = phba->pport;
 	mboxq->mbox_cmpl = lpfc_mbx_cmpl_fcf_scan_read_fcf_rec;
+
+	spin_lock_irq(&phba->hbalock);
+	phba->hba_flag |= FCF_TS_INPROG;
+	spin_unlock_irq(&phba->hbalock);
+
 	rc = lpfc_sli_issue_mbox(phba, mboxq, MBX_NOWAIT);
 	if (rc == MBX_NOT_FINISHED)
 		error = -EIO;
 	else {
-		spin_lock_irq(&phba->hbalock);
-		phba->hba_flag |= FCF_DISC_INPROGRESS;
-		spin_unlock_irq(&phba->hbalock);
-		/* Reset FCF round robin index bmask for new scan */
+		/* Reset eligible FCF count for new scan */
 		if (fcf_index == LPFC_FCOE_FCF_GET_FIRST)
-			memset(phba->fcf.fcf_rr_bmask, 0,
-			       sizeof(*phba->fcf.fcf_rr_bmask));
+			phba->fcf.eligible_fcf_cnt = 0;
 		error = 0;
 	}
 fail_fcf_scan:
 	if (error) {
 		if (mboxq)
 			lpfc_sli4_mbox_cmd_free(phba, mboxq);
-		/* FCF scan failed, clear FCF_DISC_INPROGRESS flag */
+		/* FCF scan failed, clear FCF_TS_INPROG flag */
 		spin_lock_irq(&phba->hbalock);
-		phba->hba_flag &= ~FCF_DISC_INPROGRESS;
+		phba->hba_flag &= ~FCF_TS_INPROG;
 		spin_unlock_irq(&phba->hbalock);
 	}
 	return error;
 }
 
 /**
- * lpfc_sli4_fcf_rr_read_fcf_rec - Read hba fcf record for round robin fcf.
+ * lpfc_sli4_fcf_rr_read_fcf_rec - Read hba fcf record for roundrobin fcf.
  * @phba: pointer to lpfc hba data structure.
  * @fcf_index: FCF table entry offset.
  *
  * This routine is invoked to read an FCF record indicated by @fcf_index
- * and to use it for FLOGI round robin FCF failover.
+ * and to use it for FLOGI roundrobin FCF failover.
  *
- * Return 0 if the mailbox command is submitted sucessfully, none 0
+ * Return 0 if the mailbox command is submitted successfully, none 0
  * otherwise.
  **/
 int
@@ -12109,9 +13076,9 @@ fail_fcf_read:
  * @fcf_index: FCF table entry offset.
  *
  * This routine is invoked to read an FCF record indicated by @fcf_index to
- * determine whether it's eligible for FLOGI round robin failover list.
+ * determine whether it's eligible for FLOGI roundrobin failover list.
  *
- * Return 0 if the mailbox command is submitted sucessfully, none 0
+ * Return 0 if the mailbox command is submitted successfully, none 0
  * otherwise.
  **/
 int
@@ -12155,7 +13122,7 @@ fail_fcf_read:
  *
  * This routine is to get the next eligible FCF record index in a round
  * robin fashion. If the next eligible FCF record index equals to the
- * initial round robin FCF record index, LPFC_FCOE_FCF_NEXT_NONE (0xFFFF)
+ * initial roundrobin FCF record index, LPFC_FCOE_FCF_NEXT_NONE (0xFFFF)
  * shall be returned, otherwise, the next eligible FCF record's index
  * shall be returned.
  **/
@@ -12164,17 +13131,28 @@ lpfc_sli4_fcf_rr_next_index_get(struct lpfc_hba *phba)
 {
 	uint16_t next_fcf_index;
 
-	/* Search from the currently registered FCF index */
+	/* Search start from next bit of currently registered FCF index */
+	next_fcf_index = (phba->fcf.current_rec.fcf_indx + 1) %
+					LPFC_SLI4_FCF_TBL_INDX_MAX;
 	next_fcf_index = find_next_bit(phba->fcf.fcf_rr_bmask,
 				       LPFC_SLI4_FCF_TBL_INDX_MAX,
-				       phba->fcf.current_rec.fcf_indx);
+				       next_fcf_index);
+
 	/* Wrap around condition on phba->fcf.fcf_rr_bmask */
 	if (next_fcf_index >= LPFC_SLI4_FCF_TBL_INDX_MAX)
 		next_fcf_index = find_next_bit(phba->fcf.fcf_rr_bmask,
 					       LPFC_SLI4_FCF_TBL_INDX_MAX, 0);
-	/* Round robin failover stop condition */
-	if (next_fcf_index == phba->fcf.fcf_rr_init_indx)
+
+	/* Check roundrobin failover list empty condition */
+	if (next_fcf_index >= LPFC_SLI4_FCF_TBL_INDX_MAX) {
+		lpfc_printf_log(phba, KERN_WARNING, LOG_FIP,
+				"2844 No roundrobin failover FCF available\n");
 		return LPFC_FCOE_FCF_NEXT_NONE;
+	}
+
+	lpfc_printf_log(phba, KERN_INFO, LOG_FIP,
+			"2845 Get next roundrobin failover FCF (x%x)\n",
+			next_fcf_index);
 
 	return next_fcf_index;
 }
@@ -12184,7 +13162,7 @@ lpfc_sli4_fcf_rr_next_index_get(struct lpfc_hba *phba)
  * @phba: pointer to lpfc hba data structure.
  *
  * This routine sets the FCF record index in to the eligible bmask for
- * round robin failover search. It checks to make sure that the index
+ * roundrobin failover search. It checks to make sure that the index
  * does not go beyond the range of the driver allocated bmask dimension
  * before setting the bit.
  *
@@ -12196,24 +13174,27 @@ lpfc_sli4_fcf_rr_index_set(struct lpfc_hba *phba, uint16_t fcf_index)
 {
 	if (fcf_index >= LPFC_SLI4_FCF_TBL_INDX_MAX) {
 		lpfc_printf_log(phba, KERN_ERR, LOG_FIP,
-				"2610 HBA FCF index reached driver's "
-				"book keeping dimension: fcf_index:%d, "
-				"driver_bmask_max:%d\n",
+				"2610 FCF (x%x) reached driver's book "
+				"keeping dimension:x%x\n",
 				fcf_index, LPFC_SLI4_FCF_TBL_INDX_MAX);
 		return -EINVAL;
 	}
 	/* Set the eligible FCF record index bmask */
 	set_bit(fcf_index, phba->fcf.fcf_rr_bmask);
 
+	lpfc_printf_log(phba, KERN_INFO, LOG_FIP,
+			"2790 Set FCF (x%x) to roundrobin FCF failover "
+			"bmask\n", fcf_index);
+
 	return 0;
 }
 
 /**
- * lpfc_sli4_fcf_rr_index_set - Clear bmask from eligible fcf record index
+ * lpfc_sli4_fcf_rr_index_clear - Clear bmask from eligible fcf record index
  * @phba: pointer to lpfc hba data structure.
  *
  * This routine clears the FCF record index from the eligible bmask for
- * round robin failover search. It checks to make sure that the index
+ * roundrobin failover search. It checks to make sure that the index
  * does not go beyond the range of the driver allocated bmask dimension
  * before clearing the bit.
  **/
@@ -12222,14 +13203,17 @@ lpfc_sli4_fcf_rr_index_clear(struct lpfc_hba *phba, uint16_t fcf_index)
 {
 	if (fcf_index >= LPFC_SLI4_FCF_TBL_INDX_MAX) {
 		lpfc_printf_log(phba, KERN_ERR, LOG_FIP,
-				"2762 HBA FCF index goes beyond driver's "
-				"book keeping dimension: fcf_index:%d, "
-				"driver_bmask_max:%d\n",
+				"2762 FCF (x%x) reached driver's book "
+				"keeping dimension:x%x\n",
 				fcf_index, LPFC_SLI4_FCF_TBL_INDX_MAX);
 		return;
 	}
 	/* Clear the eligible FCF record index bmask */
 	clear_bit(fcf_index, phba->fcf.fcf_rr_bmask);
+
+	lpfc_printf_log(phba, KERN_INFO, LOG_FIP,
+			"2791 Clear FCF (x%x) from roundrobin failover "
+			"bmask\n", fcf_index);
 }
 
 /**
@@ -12279,8 +13263,7 @@ lpfc_mbx_cmpl_redisc_fcf_table(struct lpfc_hba *phba, LPFC_MBOXQ_t *mbox)
 		}
 	} else {
 		lpfc_printf_log(phba, KERN_INFO, LOG_FIP,
-				"2775 Start FCF rediscovery quiescent period "
-				"wait timer before scaning FCF table\n");
+				"2775 Start FCF rediscover quiescent timer\n");
 		/*
 		 * Start FCF rediscovery wait timer for pending FCF
 		 * before rescan FCF record table.
@@ -12292,7 +13275,7 @@ lpfc_mbx_cmpl_redisc_fcf_table(struct lpfc_hba *phba, LPFC_MBOXQ_t *mbox)
 }
 
 /**
- * lpfc_sli4_redisc_all_fcf - Request to rediscover entire FCF table by port.
+ * lpfc_sli4_redisc_fcf_table - Request to rediscover entire FCF table by port.
  * @phba: pointer to lpfc hba data structure.
  *
  * This routine is invoked to request for rediscovery of the entire FCF table
@@ -12507,7 +13490,13 @@ lpfc_cleanup_pending_mbox(struct lpfc_vport *vport)
 	struct lpfc_hba *phba = vport->phba;
 	LPFC_MBOXQ_t *mb, *nextmb;
 	struct lpfc_dmabuf *mp;
+	struct lpfc_nodelist *ndlp;
+	struct lpfc_nodelist *act_mbx_ndlp = NULL;
+	struct Scsi_Host  *shost = lpfc_shost_from_vport(vport);
+	LIST_HEAD(mbox_cmd_list);
+	uint8_t restart_loop;
 
+	/* Clean up internally queued mailbox commands with the vport */
 	spin_lock_irq(&phba->hbalock);
 	list_for_each_entry_safe(mb, nextmb, &phba->sli.mboxq, list) {
 		if (mb->vport != vport)
@@ -12517,22 +13506,167 @@ lpfc_cleanup_pending_mbox(struct lpfc_vport *vport)
 			(mb->u.mb.mbxCommand != MBX_REG_VPI))
 			continue;
 
+		list_del(&mb->list);
+		list_add_tail(&mb->list, &mbox_cmd_list);
+	}
+	/* Clean up active mailbox command with the vport */
+	mb = phba->sli.mbox_active;
+	if (mb && (mb->vport == vport)) {
+		if ((mb->u.mb.mbxCommand == MBX_REG_LOGIN64) ||
+			(mb->u.mb.mbxCommand == MBX_REG_VPI))
+			mb->mbox_cmpl = lpfc_sli_def_mbox_cmpl;
+		if (mb->u.mb.mbxCommand == MBX_REG_LOGIN64) {
+			act_mbx_ndlp = (struct lpfc_nodelist *)mb->context2;
+			/* Put reference count for delayed processing */
+			act_mbx_ndlp = lpfc_nlp_get(act_mbx_ndlp);
+			/* Unregister the RPI when mailbox complete */
+			mb->mbox_flag |= LPFC_MBX_IMED_UNREG;
+		}
+	}
+	/* Cleanup any mailbox completions which are not yet processed */
+	do {
+		restart_loop = 0;
+		list_for_each_entry(mb, &phba->sli.mboxq_cmpl, list) {
+			/*
+			 * If this mailox is already processed or it is
+			 * for another vport ignore it.
+			 */
+			if ((mb->vport != vport) ||
+				(mb->mbox_flag & LPFC_MBX_IMED_UNREG))
+				continue;
+
+			if ((mb->u.mb.mbxCommand != MBX_REG_LOGIN64) &&
+				(mb->u.mb.mbxCommand != MBX_REG_VPI))
+				continue;
+
+			mb->mbox_cmpl = lpfc_sli_def_mbox_cmpl;
+			if (mb->u.mb.mbxCommand == MBX_REG_LOGIN64) {
+				ndlp = (struct lpfc_nodelist *)mb->context2;
+				/* Unregister the RPI when mailbox complete */
+				mb->mbox_flag |= LPFC_MBX_IMED_UNREG;
+				restart_loop = 1;
+				spin_unlock_irq(&phba->hbalock);
+				spin_lock(shost->host_lock);
+				ndlp->nlp_flag &= ~NLP_IGNR_REG_CMPL;
+				spin_unlock(shost->host_lock);
+				spin_lock_irq(&phba->hbalock);
+				break;
+			}
+		}
+	} while (restart_loop);
+
+	spin_unlock_irq(&phba->hbalock);
+
+	/* Release the cleaned-up mailbox commands */
+	while (!list_empty(&mbox_cmd_list)) {
+		list_remove_head(&mbox_cmd_list, mb, LPFC_MBOXQ_t, list);
 		if (mb->u.mb.mbxCommand == MBX_REG_LOGIN64) {
 			mp = (struct lpfc_dmabuf *) (mb->context1);
 			if (mp) {
 				__lpfc_mbuf_free(phba, mp->virt, mp->phys);
 				kfree(mp);
 			}
+			ndlp = (struct lpfc_nodelist *) mb->context2;
+			mb->context2 = NULL;
+			if (ndlp) {
+				spin_lock(shost->host_lock);
+				ndlp->nlp_flag &= ~NLP_IGNR_REG_CMPL;
+				spin_unlock(shost->host_lock);
+				lpfc_nlp_put(ndlp);
+			}
 		}
-		list_del(&mb->list);
 		mempool_free(mb, phba->mbox_mem_pool);
 	}
-	mb = phba->sli.mbox_active;
-	if (mb && (mb->vport == vport)) {
-		if ((mb->u.mb.mbxCommand == MBX_REG_LOGIN64) ||
-			(mb->u.mb.mbxCommand == MBX_REG_VPI))
-			mb->mbox_cmpl = lpfc_sli_def_mbox_cmpl;
+
+	/* Release the ndlp with the cleaned-up active mailbox command */
+	if (act_mbx_ndlp) {
+		spin_lock(shost->host_lock);
+		act_mbx_ndlp->nlp_flag &= ~NLP_IGNR_REG_CMPL;
+		spin_unlock(shost->host_lock);
+		lpfc_nlp_put(act_mbx_ndlp);
 	}
-	spin_unlock_irq(&phba->hbalock);
 }
 
+/**
+ * lpfc_drain_txq - Drain the txq
+ * @phba: Pointer to HBA context object.
+ *
+ * This function attempt to submit IOCBs on the txq
+ * to the adapter.  For SLI4 adapters, the txq contains
+ * ELS IOCBs that have been deferred because the there
+ * are no SGLs.  This congestion can occur with large
+ * vport counts during node discovery.
+ **/
+
+uint32_t
+lpfc_drain_txq(struct lpfc_hba *phba)
+{
+	LIST_HEAD(completions);
+	struct lpfc_sli_ring *pring = &phba->sli.ring[LPFC_ELS_RING];
+	struct lpfc_iocbq *piocbq = 0;
+	unsigned long iflags = 0;
+	char *fail_msg = NULL;
+	struct lpfc_sglq *sglq;
+	union lpfc_wqe wqe;
+
+	spin_lock_irqsave(&phba->hbalock, iflags);
+	if (pring->txq_cnt > pring->txq_max)
+		pring->txq_max = pring->txq_cnt;
+
+	spin_unlock_irqrestore(&phba->hbalock, iflags);
+
+	while (pring->txq_cnt) {
+		spin_lock_irqsave(&phba->hbalock, iflags);
+
+		piocbq = lpfc_sli_ringtx_get(phba, pring);
+		sglq = __lpfc_sli_get_sglq(phba, piocbq);
+		if (!sglq) {
+			__lpfc_sli_ringtx_put(phba, pring, piocbq);
+			spin_unlock_irqrestore(&phba->hbalock, iflags);
+			break;
+		} else {
+			if (!piocbq) {
+				/* The txq_cnt out of sync. This should
+				 * never happen
+				 */
+				sglq = __lpfc_clear_active_sglq(phba,
+						 sglq->sli4_xritag);
+				spin_unlock_irqrestore(&phba->hbalock, iflags);
+				lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
+					"2823 txq empty and txq_cnt is %d\n ",
+					pring->txq_cnt);
+				break;
+			}
+		}
+
+		/* The xri and iocb resources secured,
+		 * attempt to issue request
+		 */
+		piocbq->sli4_xritag = sglq->sli4_xritag;
+		if (NO_XRI == lpfc_sli4_bpl2sgl(phba, piocbq, sglq))
+			fail_msg = "to convert bpl to sgl";
+		else if (lpfc_sli4_iocb2wqe(phba, piocbq, &wqe))
+			fail_msg = "to convert iocb to wqe";
+		else if (lpfc_sli4_wq_put(phba->sli4_hba.els_wq, &wqe))
+			fail_msg = " - Wq is full";
+		else
+			lpfc_sli_ringtxcmpl_put(phba, pring, piocbq);
+
+		if (fail_msg) {
+			/* Failed means we can't issue and need to cancel */
+			lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
+					"2822 IOCB failed %s iotag 0x%x "
+					"xri 0x%x\n",
+					fail_msg,
+					piocbq->iotag, piocbq->sli4_xritag);
+			list_add_tail(&piocbq->list, &completions);
+		}
+		spin_unlock_irqrestore(&phba->hbalock, iflags);
+	}
+
+	/* Cancel all the IOCBs that cannot be issued */
+	lpfc_sli_cancel_iocbs(phba, &completions, IOSTAT_LOCAL_REJECT,
+				IOERR_SLI_ABORTED);
+
+	return pring->txq_cnt;
+}

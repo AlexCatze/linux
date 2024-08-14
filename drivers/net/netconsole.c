@@ -664,11 +664,14 @@ static int netconsole_netdev_event(struct notifier_block *this,
 	unsigned long flags;
 	struct netconsole_target *nt;
 	struct net_device *dev = ptr;
+	bool stopped = false;
 
-	if (!(event == NETDEV_CHANGENAME || event == NETDEV_UNREGISTER))
+	if (!(event == NETDEV_CHANGENAME || event == NETDEV_UNREGISTER ||
+	      event == NETDEV_BONDING_DESLAVE || event == NETDEV_GOING_DOWN))
 		goto done;
 
 	spin_lock_irqsave(&target_list_lock, flags);
+restart:
 	list_for_each_entry(nt, &target_list, list) {
 		netconsole_target_get(nt);
 		if (nt->np.dev == dev) {
@@ -677,19 +680,36 @@ static int netconsole_netdev_event(struct notifier_block *this,
 				strlcpy(nt->np.dev_name, dev->name, IFNAMSIZ);
 				break;
 			case NETDEV_UNREGISTER:
-				if (!nt->enabled)
-					break;
-				netpoll_cleanup(&nt->np);
+				/*
+				 * rtnl_lock already held
+				 */
+				if (nt->np.dev) {
+					spin_unlock_irqrestore(
+							      &target_list_lock,
+							      flags);
+					__netpoll_cleanup(&nt->np);
+					spin_lock_irqsave(&target_list_lock,
+							  flags);
+					dev_put(nt->np.dev);
+					nt->np.dev = NULL;
+					netconsole_target_put(nt);
+					goto restart;
+				}
+				/* Fall through */
+			case NETDEV_GOING_DOWN:
+			case NETDEV_BONDING_DESLAVE:
 				nt->enabled = 0;
-				printk(KERN_INFO "netconsole: network logging stopped"
-					", interface %s unregistered\n",
-					dev->name);
+				stopped = true;
 				break;
 			}
 		}
 		netconsole_target_put(nt);
 	}
 	spin_unlock_irqrestore(&target_list_lock, flags);
+	if (stopped && (event == NETDEV_UNREGISTER || event == NETDEV_BONDING_DESLAVE))
+		printk(KERN_INFO "netconsole: network logging stopped on "
+			"interface %s as it %s\n",  dev->name,
+			event == NETDEV_UNREGISTER ? "unregistered" : "released slaves");
 
 done:
 	return NOTIFY_DONE;

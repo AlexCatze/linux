@@ -4,7 +4,7 @@
  * Copyright (C) 2001, 2002, 2003, 2004 David S. Miller (davem@redhat.com)
  * Copyright (C) 2001 Jeff Garzik (jgarzik@pobox.com)
  * Copyright (C) 2004 Sun Microsystems Inc.
- * Copyright (C) 2007-2010 Broadcom Corporation.
+ * Copyright (C) 2007-2011 Broadcom Corporation.
  */
 
 #ifndef _T3_H
@@ -23,12 +23,10 @@
 #define TG3_BDINFO_NIC_ADDR		0xcUL /* 32-bit */
 #define TG3_BDINFO_SIZE			0x10UL
 
-#define RX_COPY_THRESHOLD  		256
-
 #define TG3_RX_INTERNAL_RING_SZ_5906	32
 
-#define RX_STD_MAX_SIZE			1536
 #define RX_STD_MAX_SIZE_5705		512
+#define RX_STD_MAX_SIZE_5717		2048
 #define RX_JUMBO_MAX_SIZE		0xdeadbeef /* XXX */
 
 /* First 256 bytes are a mirror of PCI config space. */
@@ -49,13 +47,13 @@
 #define  TG3PCI_DEVICE_TIGON3_5785_F	 0x16a0 /* 10/100 only */
 #define  TG3PCI_DEVICE_TIGON3_5717	 0x1655
 #define  TG3PCI_DEVICE_TIGON3_5718	 0x1656
-#define  TG3PCI_DEVICE_TIGON3_5724	 0x165c
 #define  TG3PCI_DEVICE_TIGON3_57781	 0x16b1
 #define  TG3PCI_DEVICE_TIGON3_57785	 0x16b5
 #define  TG3PCI_DEVICE_TIGON3_57761	 0x16b0
 #define  TG3PCI_DEVICE_TIGON3_57765	 0x16b4
 #define  TG3PCI_DEVICE_TIGON3_57791	 0x16b2
 #define  TG3PCI_DEVICE_TIGON3_57795	 0x16b6
+#define  TG3PCI_DEVICE_TIGON3_5719	 0x1657
 /* 0x04 --> 0x2c unused */
 #define TG3PCI_SUBVENDOR_ID_BROADCOM		PCI_VENDOR_ID_BROADCOM
 #define TG3PCI_SUBDEVICE_ID_BROADCOM_95700A6	0x1644
@@ -143,6 +141,7 @@
 #define  CHIPREV_ID_57780_A1		 0x57780001
 #define  CHIPREV_ID_5717_A0		 0x05717000
 #define  CHIPREV_ID_57765_A0		 0x57785000
+#define  CHIPREV_ID_5719_A0		 0x05719000
 #define  GET_ASIC_REV(CHIP_REV_ID)	((CHIP_REV_ID) >> 12)
 #define   ASIC_REV_5700			 0x07
 #define   ASIC_REV_5701			 0x00
@@ -163,6 +162,7 @@
 #define   ASIC_REV_57780		 0x57780
 #define   ASIC_REV_5717			 0x5717
 #define   ASIC_REV_57765		 0x57785
+#define   ASIC_REV_5719			 0x5719
 #define  GET_CHIP_REV(CHIP_REV_ID)	((CHIP_REV_ID) >> 8)
 #define   CHIPREV_5700_AX		 0x70
 #define   CHIPREV_5700_BX		 0x71
@@ -183,6 +183,7 @@
 #define   METAL_REV_B2			 0x02
 #define TG3PCI_DMA_RW_CTRL		0x0000006c
 #define  DMA_RWCTRL_DIS_CACHE_ALIGNMENT  0x00000001
+#define  DMA_RWCTRL_CRDRDR_RDMA_MRRS_MSK 0x00000380
 #define  DMA_RWCTRL_READ_BNDRY_MASK	 0x00000700
 #define  DMA_RWCTRL_READ_BNDRY_DISAB	 0x00000000
 #define  DMA_RWCTRL_READ_BNDRY_16	 0x00000100
@@ -233,6 +234,7 @@
 #define  PCISTATE_RETRY_SAME_DMA	 0x00002000
 #define  PCISTATE_ALLOW_APE_CTLSPC_WR	 0x00010000
 #define  PCISTATE_ALLOW_APE_SHMEM_WR	 0x00020000
+#define  PCISTATE_ALLOW_APE_PSPACE_WR	 0x00040000
 #define TG3PCI_CLOCK_CTRL		0x00000074
 #define  CLOCK_CTRL_CORECLK_DISABLE	 0x00000200
 #define  CLOCK_CTRL_RXCLK_DISABLE	 0x00000400
@@ -252,7 +254,7 @@
 /* 0x94 --> 0x98 unused */
 #define TG3PCI_STD_RING_PROD_IDX	0x00000098 /* 64-bit */
 #define TG3PCI_RCV_RET_RING_CON_IDX	0x000000a0 /* 64-bit */
-/* 0xa0 --> 0xb8 unused */
+/* 0xa8 --> 0xb8 unused */
 #define TG3PCI_DUAL_MAC_CTRL		0x000000b8
 #define  DUAL_MAC_CTRL_CH_MASK		 0x00000003
 #define  DUAL_MAC_CTRL_ID		 0x00000004
@@ -470,6 +472,7 @@
 #define  TX_MODE_FLOW_CTRL_ENABLE	 0x00000010
 #define  TX_MODE_BIG_BCKOFF_ENABLE	 0x00000020
 #define  TX_MODE_LONG_PAUSE_ENABLE	 0x00000040
+#define  TX_MODE_MBUF_LOCKUP_FIX	 0x00000100
 #define MAC_TX_STATUS			0x00000460
 #define  TX_STATUS_XOFFED		 0x00000001
 #define  TX_STATUS_SENT_XOFF		 0x00000002
@@ -971,6 +974,7 @@
 #define  RCVDBDI_MODE_JUMBOBD_NEEDED	 0x00000004
 #define  RCVDBDI_MODE_FRM_TOO_BIG	 0x00000008
 #define  RCVDBDI_MODE_INV_RING_SZ	 0x00000010
+#define  RCVDBDI_MODE_LRG_RING_SZ	 0x00010000
 #define RCVDBDI_STATUS			0x00002404
 #define  RCVDBDI_STATUS_JUMBOBD_NEEDED	 0x00000004
 #define  RCVDBDI_STATUS_FRM_TOO_BIG	 0x00000008
@@ -1073,10 +1077,8 @@
 #define TG3_CPMU_HST_ACC		0x0000361c
 #define  CPMU_HST_ACC_MACCLK_MASK	 0x001f0000
 #define  CPMU_HST_ACC_MACCLK_6_25	 0x00130000
-/* 0x3620 --> 0x362c unused */
+/* 0x3620 --> 0x3630 unused */
 
-#define TG3_CPMU_STATUS			0x0000362c
-#define  TG3_CPMU_STATUS_PCIE_FUNC	 0x20000000
 #define TG3_CPMU_CLCK_STAT		0x00003630
 #define  CPMU_CLCK_STAT_MAC_CLCK_MASK	 0x001f0000
 #define  CPMU_CLCK_STAT_MAC_CLCK_62_5	 0x00000000
@@ -1090,7 +1092,32 @@
 #define  CPMU_MUTEX_GNT_DRIVER		 0x00001000
 #define TG3_CPMU_PHY_STRAP		0x00003664
 #define TG3_CPMU_PHY_STRAP_IS_SERDES	 0x00000020
-/* 0x3664 --> 0x3800 unused */
+/* 0x3664 --> 0x36b0 unused */
+
+#define TG3_CPMU_EEE_MODE		0x000036b0
+#define  TG3_CPMU_EEEMD_APE_TX_DET_EN	 0x00000004
+#define  TG3_CPMU_EEEMD_ERLY_L1_XIT_DET	 0x00000008
+#define  TG3_CPMU_EEEMD_SND_IDX_DET_EN	 0x00000040
+#define  TG3_CPMU_EEEMD_LPI_ENABLE	 0x00000080
+#define  TG3_CPMU_EEEMD_LPI_IN_TX	 0x00000100
+#define  TG3_CPMU_EEEMD_LPI_IN_RX	 0x00000200
+#define  TG3_CPMU_EEEMD_EEE_ENABLE	 0x00100000
+#define TG3_CPMU_EEE_DBTMR1		0x000036b4
+#define  TG3_CPMU_DBTMR1_PCIEXIT_2047US	 0x07ff0000
+#define  TG3_CPMU_DBTMR1_LNKIDLE_2047US	 0x000070ff
+#define TG3_CPMU_EEE_DBTMR2		0x000036b8
+#define  TG3_CPMU_DBTMR2_APE_TX_2047US	 0x07ff0000
+#define  TG3_CPMU_DBTMR2_TXIDXEQ_2047US	 0x000070ff
+#define TG3_CPMU_EEE_LNKIDL_CTRL	0x000036bc
+#define  TG3_CPMU_EEE_LNKIDL_PCIE_NL0	 0x01000000
+#define  TG3_CPMU_EEE_LNKIDL_UART_IDL	 0x00000004
+/* 0x36c0 --> 0x36d0 unused */
+
+#define TG3_CPMU_EEE_CTRL		0x000036d0
+#define TG3_CPMU_EEE_CTRL_EXIT_16_5_US	 0x0000019d
+#define TG3_CPMU_EEE_CTRL_EXIT_36_US	 0x00000384
+#define TG3_CPMU_EEE_CTRL_EXIT_20_1_US	 0x000001f8
+/* 0x36d4 --> 0x3800 unused */
 
 /* Mbuf cluster free registers */
 #define MBFREE_MODE			0x00003800
@@ -1225,6 +1252,7 @@
 #define  BUFMGR_MODE_ATTN_ENABLE	 0x00000004
 #define  BUFMGR_MODE_BM_TEST		 0x00000008
 #define  BUFMGR_MODE_MBLOW_ATTN_ENAB	 0x00000010
+#define  BUFMGR_MODE_NO_TX_UNDERRUN	 0x80000000
 #define BUFMGR_STATUS			0x00004404
 #define  BUFMGR_STATUS_ERROR		 0x00000004
 #define  BUFMGR_STATUS_MBLOW		 0x00000010
@@ -1302,7 +1330,22 @@
 #define  RDMAC_STATUS_FIFOURUN		 0x00000080
 #define  RDMAC_STATUS_FIFOOREAD		 0x00000100
 #define  RDMAC_STATUS_LNGREAD		 0x00000200
-/* 0x4808 --> 0x4c00 unused */
+/* 0x4808 --> 0x4900 unused */
+
+#define TG3_RDMA_RSRVCTRL_REG		0x00004900
+#define TG3_RDMA_RSRVCTRL_FIFO_OFLW_FIX	 0x00000004
+#define TG3_RDMA_RSRVCTRL_FIFO_LWM_1_5K	 0x00000c00
+#define TG3_RDMA_RSRVCTRL_FIFO_LWM_MASK	 0x00000ff0
+#define TG3_RDMA_RSRVCTRL_FIFO_HWM_1_5K	 0x000c0000
+#define TG3_RDMA_RSRVCTRL_FIFO_HWM_MASK	 0x000ff000
+#define TG3_RDMA_RSRVCTRL_TXMRGN_320B	 0x28000000
+#define TG3_RDMA_RSRVCTRL_TXMRGN_MASK	 0xffe00000
+/* 0x4904 --> 0x4910 unused */
+
+#define TG3_LSO_RD_DMA_CRPTEN_CTRL	0x00004910
+#define TG3_LSO_RD_DMA_CRPTEN_CTRL_BLEN_BD_4K	 0x00030000
+#define TG3_LSO_RD_DMA_CRPTEN_CTRL_BLEN_LSO_4K	 0x000c0000
+/* 0x4914 --> 0x4c00 unused */
 
 /* Write DMA control registers */
 #define WDMAC_MODE			0x00004c00
@@ -1844,6 +1887,10 @@
 #define  TG3_PCIE_LNKCTL_L1_PLL_PD_DIS	 0x00000080
 /* 0x7d58 --> 0x7e70 unused */
 
+#define TG3_PCIE_PHY_TSTCTL		0x00007e2c
+#define  TG3_PCIE_PHY_TSTCTL_PCIE10	 0x00000040
+#define  TG3_PCIE_PHY_TSTCTL_PSCRAM	 0x00000020
+
 #define TG3_PCIE_EIDLE_DELAY		0x00007e70
 #define  TG3_PCIE_EIDLE_DELAY_MASK	 0x0000001f
 #define  TG3_PCIE_EIDLE_DELAY_13_CLKS	 0x0000000c
@@ -1854,6 +1901,8 @@
 #define TG3_PCIE_TLDLPL_PORT		0x00007c00
 #define TG3_PCIE_PL_LO_PHYCTL1		 0x00000004
 #define TG3_PCIE_PL_LO_PHYCTL1_L1PLLPD_EN	  0x00001000
+#define TG3_PCIE_PL_LO_PHYCTL5		 0x00000014
+#define TG3_PCIE_PL_LO_PHYCTL5_DIS_L2CLKREQ	  0x80000000
 
 /* OTP bit definitions */
 #define TG3_OTP_AGCTGT_MASK		0x000000e0
@@ -1898,6 +1947,7 @@
 #define TG3_EEPROM_SB_REVISION_3	0x00030000
 #define TG3_EEPROM_SB_REVISION_4	0x00040000
 #define TG3_EEPROM_SB_REVISION_5	0x00050000
+#define TG3_EEPROM_SB_REVISION_6	0x00060000
 #define TG3_EEPROM_MAGIC_HW		0xabcd
 #define TG3_EEPROM_MAGIC_HW_MSK		0xffff
 
@@ -1917,6 +1967,7 @@
 #define TG3_EEPROM_SB_F1R3_EDH_OFF	0x18
 #define TG3_EEPROM_SB_F1R4_EDH_OFF	0x1c
 #define TG3_EEPROM_SB_F1R5_EDH_OFF	0x20
+#define TG3_EEPROM_SB_F1R6_EDH_OFF	0x4c
 #define TG3_EEPROM_SB_EDH_MAJ_MASK	0x00000700
 #define TG3_EEPROM_SB_EDH_MAJ_SHFT	8
 #define TG3_EEPROM_SB_EDH_MIN_MASK	0x000000ff
@@ -2030,29 +2081,7 @@
 
 
 /* Currently this is fixed. */
-#define TG3_PHY_PCIE_ADDR		0x00
 #define TG3_PHY_MII_ADDR		0x01
-
-
-/*** Tigon3 specific PHY PCIE registers. ***/
-
-#define TG3_PCIEPHY_BLOCK_ADDR		0x1f
-#define  TG3_PCIEPHY_XGXS_BLK1		0x0801
-#define  TG3_PCIEPHY_TXB_BLK		0x0861
-#define  TG3_PCIEPHY_BLOCK_SHIFT	4
-
-/* TG3_PCIEPHY_TXB_BLK */
-#define TG3_PCIEPHY_TX0CTRL1		0x15
-#define  TG3_PCIEPHY_TX0CTRL1_TXOCM	0x0003
-#define  TG3_PCIEPHY_TX0CTRL1_RDCTL	0x0008
-#define  TG3_PCIEPHY_TX0CTRL1_TXCMV	0x0030
-#define  TG3_PCIEPHY_TX0CTRL1_TKSEL	0x0040
-#define  TG3_PCIEPHY_TX0CTRL1_NB_EN	0x0400
-
-/* TG3_PCIEPHY_XGXS_BLK1 */
-#define TG3_PCIEPHY_PWRMGMT4		0x1a
-#define TG3_PCIEPHY_PWRMGMT4_L1PLLPD_EN	0x0038
-#define TG3_PCIEPHY_PWRMGMT4_LOWPWR_EN	0x4000
 
 
 /*** Tigon3 specific PHY MII registers. ***/
@@ -2064,6 +2093,10 @@
 #define  MII_TG3_CTRL_AS_MASTER		0x0800
 #define  MII_TG3_CTRL_ENABLE_AS_MASTER	0x1000
 
+#define MII_TG3_MMD_CTRL		0x0d /* MMD Access Control register */
+#define MII_TG3_MMD_CTRL_DATA_NOINC	0x4000
+#define MII_TG3_MMD_ADDRESS		0x0e /* MMD Address Data register */
+
 #define MII_TG3_EXT_CTRL		0x10 /* Extended control register */
 #define  MII_TG3_EXT_CTRL_FIFO_ELASTIC	0x0001
 #define  MII_TG3_EXT_CTRL_LNK3_LED_MODE	0x0002
@@ -2073,23 +2106,31 @@
 #define MII_TG3_EXT_STAT		0x11 /* Extended status register */
 #define  MII_TG3_EXT_STAT_LPASS		0x0100
 
+#define MII_TG3_RXR_COUNTERS		0x14 /* Local/Remote Receiver Counts */
 #define MII_TG3_DSP_RW_PORT		0x15 /* DSP coefficient read/write port */
-
+#define MII_TG3_DSP_CONTROL		0x16 /* DSP control register */
 #define MII_TG3_DSP_ADDRESS		0x17 /* DSP address register */
 
 #define MII_TG3_DSP_TAP1		0x0001
 #define  MII_TG3_DSP_TAP1_AGCTGT_DFLT	0x0007
+#define MII_TG3_DSP_TAP26		0x001a
+#define  MII_TG3_DSP_TAP26_ALNOKO	0x0001
+#define  MII_TG3_DSP_TAP26_RMRXSTO	0x0002
+#define  MII_TG3_DSP_TAP26_OPCSINPT	0x0004
 #define MII_TG3_DSP_AADJ1CH0		0x001f
+#define MII_TG3_DSP_CH34TP2		0x4022
+#define MII_TG3_DSP_CH34TP2_HIBW01	0x0010
 #define MII_TG3_DSP_AADJ1CH3		0x601f
 #define  MII_TG3_DSP_AADJ1CH3_ADCCKADJ	0x0002
-#define MII_TG3_DSP_EXP8		0x0708
+#define MII_TG3_DSP_EXP1_INT_STAT	0x0f01
+#define MII_TG3_DSP_EXP8		0x0f08
 #define  MII_TG3_DSP_EXP8_REJ2MHz	0x0001
 #define  MII_TG3_DSP_EXP8_AEDW		0x0200
 #define MII_TG3_DSP_EXP75		0x0f75
 #define MII_TG3_DSP_EXP96		0x0f96
 #define MII_TG3_DSP_EXP97		0x0f97
 
-#define MII_TG3_AUX_CTRL		0x18 /* auxilliary control register */
+#define MII_TG3_AUX_CTRL		0x18 /* auxiliary control register */
 
 #define MII_TG3_AUXCTL_PCTL_100TX_LPWR	0x0010
 #define MII_TG3_AUXCTL_PCTL_SPR_ISOLATE	0x0020
@@ -2105,7 +2146,7 @@
 #define MII_TG3_AUXCTL_ACTL_TX_6DB	0x0400
 #define MII_TG3_AUXCTL_SHDWSEL_AUXCTL	0x0000
 
-#define MII_TG3_AUX_STAT		0x19 /* auxilliary status register */
+#define MII_TG3_AUX_STAT		0x19 /* auxiliary status register */
 #define MII_TG3_AUX_STAT_LPASS		0x0004
 #define MII_TG3_AUX_STAT_SPDMASK	0x0700
 #define MII_TG3_AUX_STAT_10HALF		0x0100
@@ -2145,6 +2186,11 @@
 #define MII_TG3_TEST1_TRIM_EN		0x0010
 #define MII_TG3_TEST1_CRC_EN		0x8000
 
+/* Clause 45 expansion registers */
+#define TG3_CL45_D7_EEERES_STAT		0x803e
+#define TG3_CL45_D7_EEERES_STAT_LP_100TX	0x0002
+#define TG3_CL45_D7_EEERES_STAT_LP_1000T	0x0004
+
 
 /* Fast Ethernet Tranceiver definitions */
 #define MII_TG3_FET_PTEST		0x17
@@ -2177,6 +2223,8 @@
 /* APE shared memory.  Accessible through BAR1 */
 #define TG3_APE_FW_STATUS		0x400c
 #define  APE_FW_STATUS_READY		 0x00000100
+#define TG3_APE_FW_FEATURES		0x4010
+#define  TG3_APE_FW_FEATURE_NCSI	 0x00000002
 #define TG3_APE_FW_VERSION		0x4018
 #define  APE_FW_VERSION_MAJMSK		 0xff000000
 #define  APE_FW_VERSION_MAJSFT		 24
@@ -2188,16 +2236,24 @@
 #define TG3_APE_HOST_SEG_SIG		0x4200
 #define  APE_HOST_SEG_SIG_MAGIC		 0x484f5354
 #define TG3_APE_HOST_SEG_LEN		0x4204
-#define  APE_HOST_SEG_LEN_MAGIC		 0x0000001c
+#define  APE_HOST_SEG_LEN_MAGIC		 0x00000020
 #define TG3_APE_HOST_INIT_COUNT		0x4208
 #define TG3_APE_HOST_DRIVER_ID		0x420c
-#define  APE_HOST_DRIVER_ID_MAGIC	 0xf0035100
+#define  APE_HOST_DRIVER_ID_LINUX	 0xf0000000
+#define  APE_HOST_DRIVER_ID_MAGIC(maj, min)	\
+	(APE_HOST_DRIVER_ID_LINUX | (maj & 0xff) << 16 | (min & 0xff) << 8)
 #define TG3_APE_HOST_BEHAVIOR		0x4210
 #define  APE_HOST_BEHAV_NO_PHYLOCK	 0x00000001
 #define TG3_APE_HOST_HEARTBEAT_INT_MS	0x4214
 #define  APE_HOST_HEARTBEAT_INT_DISABLE	 0
 #define  APE_HOST_HEARTBEAT_INT_5SEC	 5000
 #define TG3_APE_HOST_HEARTBEAT_COUNT	0x4218
+#define TG3_APE_HOST_DRVR_STATE		0x421c
+#define TG3_APE_HOST_DRVR_STATE_START	 0x00000001
+#define TG3_APE_HOST_DRVR_STATE_UNLOAD	 0x00000002
+#define TG3_APE_HOST_DRVR_STATE_WOL	 0x00000003
+#define TG3_APE_HOST_WOL_SPEED		0x4224
+#define TG3_APE_HOST_WOL_SPEED_AUTO	 0x00008000
 
 #define TG3_APE_EVENT_STATUS		0x4300
 
@@ -2208,6 +2264,11 @@
 #define  APE_EVENT_STATUS_STATE_WOL	 0x00030000
 #define  APE_EVENT_STATUS_STATE_SUSPEND	 0x00040000
 #define  APE_EVENT_STATUS_EVENT_PENDING	 0x80000000
+
+#define TG3_APE_PER_LOCK_REQ		0x8400
+#define  APE_LOCK_PER_REQ_DRIVER	 0x00001000
+#define TG3_APE_PER_LOCK_GRANT		0x8420
+#define  APE_PER_LOCK_GRANT_DRIVER	 0x00001000
 
 /* APE convenience enumerations. */
 #define TG3_APE_LOCK_GRC                1
@@ -2512,11 +2573,7 @@ struct tg3_hw_stats {
  */
 struct ring_info {
 	struct sk_buff			*skb;
-	DECLARE_PCI_UNMAP_ADDR(mapping)
-};
-
-struct tg3_config_info {
-	u32				flags;
+	DEFINE_DMA_UNMAP_ADDR(mapping);
 };
 
 struct tg3_link_config {
@@ -2539,7 +2596,6 @@ struct tg3_link_config {
 	/* When we go in and out of low power mode we need
 	 * to swap with this state.
 	 */
-	int				phy_is_low_power;
 	u16				orig_speed;
 	u8				orig_duplex;
 	u8				orig_autoneg;
@@ -2561,7 +2617,7 @@ struct tg3_bufmgr_config {
 
 struct tg3_ethtool_stats {
 	/* Statistics maintained by Receive MAC. */
-	u64 	    	rx_octets;
+	u64		rx_octets;
 	u64		rx_fragments;
 	u64		rx_ucast_packets;
 	u64		rx_mcast_packets;
@@ -2655,7 +2711,8 @@ struct tg3_rx_prodring_set {
 	dma_addr_t			rx_jmb_mapping;
 };
 
-#define TG3_IRQ_MAX_VECS 5
+#define TG3_IRQ_MAX_VECS_RSS		5
+#define TG3_IRQ_MAX_VECS		TG3_IRQ_MAX_VECS_RSS
 
 struct tg3_napi {
 	struct napi_struct		napi	____cacheline_aligned;
@@ -2666,17 +2723,17 @@ struct tg3_napi {
 	u32				last_irq_tag;
 	u32				int_mbox;
 	u32				coal_now;
-	u32				tx_prod;
+
+	u32				consmbox ____cacheline_aligned;
+	u32				rx_rcb_ptr;
+	u16				*rx_rcb_prod_idx;
+	struct tg3_rx_prodring_set	prodring;
+	struct tg3_rx_buffer_desc	*rx_rcb;
+
+	u32				tx_prod	____cacheline_aligned;
 	u32				tx_cons;
 	u32				tx_pending;
 	u32				prodmbox;
-
-	u32				consmbox;
-	u32				rx_rcb_ptr;
-	u16				*rx_rcb_prod_idx;
-	struct tg3_rx_prodring_set	*prodring;
-
-	struct tg3_rx_buffer_desc	*rx_rcb;
 	struct tg3_tx_buffer_desc	*tx_ring;
 	struct ring_info		*tx_buffers;
 
@@ -2751,20 +2808,20 @@ struct tg3 {
 	struct tg3_napi			napi[TG3_IRQ_MAX_VECS];
 	void				(*write32_rx_mbox) (struct tg3 *, u32,
 							    u32);
+	u32				rx_copy_thresh;
+	u32				rx_std_ring_mask;
+	u32				rx_jmb_ring_mask;
+	u32				rx_ret_ring_mask;
 	u32				rx_pending;
 	u32				rx_jumbo_pending;
 	u32				rx_std_max_post;
+	u32				rx_offset;
 	u32				rx_pkt_map_sz;
-#if TG3_VLAN_TAG_USED
-	struct vlan_group		*vlgrp;
-#endif
-
-	struct tg3_rx_prodring_set	prodring[TG3_IRQ_MAX_VECS];
 
 
 	/* begin "everything else" cacheline(s) section */
-	struct net_device_stats		net_stats;
-	struct net_device_stats		net_stats_prev;
+	unsigned long			rx_dropped;
+	struct rtnl_link_stats64	net_stats_prev;
 	struct tg3_ethtool_stats	estats;
 	struct tg3_ethtool_stats	estats_prev;
 
@@ -2773,13 +2830,11 @@ struct tg3 {
 	unsigned long			last_event_jiffies;
 	};
 
-	u32				rx_offset;
 	u32				tg3_flags;
 #define TG3_FLAG_TAGGED_STATUS		0x00000001
 #define TG3_FLAG_TXD_MBOX_HWBUG		0x00000002
 #define TG3_FLAG_RX_CHECKSUMS		0x00000004
 #define TG3_FLAG_USE_LINKCHG_REG	0x00000008
-#define TG3_FLAG_USE_MI_INTERRUPT	0x00000010
 #define TG3_FLAG_ENABLE_ASF		0x00000020
 #define TG3_FLAG_ASPM_WORKAROUND	0x00000040
 #define TG3_FLAG_POLL_SERDES		0x00000080
@@ -2801,7 +2856,6 @@ struct tg3 {
 #define TG3_FLAG_TX_RECOVERY_PENDING	0x00200000
 #define TG3_FLAG_WOL_CAP		0x00400000
 #define TG3_FLAG_JUMBO_RING_ENABLE	0x00800000
-#define TG3_FLAG_10_100_ONLY		0x01000000
 #define TG3_FLAG_PAUSE_AUTONEG		0x02000000
 #define TG3_FLAG_CPMU_PRESENT		0x04000000
 #define TG3_FLAG_40BIT_DMA_BUG		0x08000000
@@ -2812,22 +2866,15 @@ struct tg3 {
 	u32				tg3_flags2;
 #define TG3_FLG2_RESTART_TIMER		0x00000001
 #define TG3_FLG2_TSO_BUG		0x00000002
-#define TG3_FLG2_NO_ETH_WIRE_SPEED	0x00000004
 #define TG3_FLG2_IS_5788		0x00000008
 #define TG3_FLG2_MAX_RXPEND_64		0x00000010
 #define TG3_FLG2_TSO_CAPABLE		0x00000020
-#define TG3_FLG2_PHY_ADC_BUG		0x00000040
-#define TG3_FLG2_PHY_5704_A0_BUG	0x00000080
-#define TG3_FLG2_PHY_BER_BUG		0x00000100
 #define TG3_FLG2_PCI_EXPRESS		0x00000200
 #define TG3_FLG2_ASF_NEW_HANDSHAKE	0x00000400
 #define TG3_FLG2_HW_AUTONEG		0x00000800
 #define TG3_FLG2_IS_NIC			0x00001000
-#define TG3_FLG2_PHY_SERDES		0x00002000
-#define TG3_FLG2_CAPACITIVE_COUPLING	0x00004000
 #define TG3_FLG2_FLASH			0x00008000
 #define TG3_FLG2_HW_TSO_1		0x00010000
-#define TG3_FLG2_SERDES_PREEMPHASIS	0x00020000
 #define TG3_FLG2_5705_PLUS		0x00040000
 #define TG3_FLG2_5750_PLUS		0x00080000
 #define TG3_FLG2_HW_TSO_3		0x00100000
@@ -2835,10 +2882,6 @@ struct tg3 {
 #define TG3_FLG2_USING_MSIX		0x00400000
 #define TG3_FLG2_USING_MSI_OR_MSIX	(TG3_FLG2_USING_MSI | \
 					TG3_FLG2_USING_MSIX)
-#define TG3_FLG2_MII_SERDES		0x00800000
-#define TG3_FLG2_ANY_SERDES		(TG3_FLG2_PHY_SERDES |	\
-					TG3_FLG2_MII_SERDES)
-#define TG3_FLG2_PARALLEL_DETECT	0x01000000
 #define TG3_FLG2_ICH_WORKAROUND		0x02000000
 #define TG3_FLG2_5780_CLASS		0x04000000
 #define TG3_FLG2_HW_TSO_2		0x08000000
@@ -2846,9 +2889,7 @@ struct tg3 {
 					 TG3_FLG2_HW_TSO_2 | \
 					 TG3_FLG2_HW_TSO_3)
 #define TG3_FLG2_1SHOT_MSI		0x10000000
-#define TG3_FLG2_PHY_JITTER_BUG		0x20000000
 #define TG3_FLG2_NO_FWARE_REPORTED	0x40000000
-#define TG3_FLG2_PHY_ADJUST_TRIM	0x80000000
 	u32				tg3_flags3;
 #define TG3_FLG3_NO_NVRAM_ADDR_TRANS	0x00000001
 #define TG3_FLG3_ENABLE_APE		0x00000002
@@ -2856,15 +2897,12 @@ struct tg3 {
 #define TG3_FLG3_5701_DMA_BUG		0x00000008
 #define TG3_FLG3_USE_PHYLIB		0x00000010
 #define TG3_FLG3_MDIOBUS_INITED		0x00000020
-#define TG3_FLG3_PHY_CONNECTED		0x00000080
 #define TG3_FLG3_RGMII_INBAND_DISABLE	0x00000100
 #define TG3_FLG3_RGMII_EXT_IBND_RX_EN	0x00000200
 #define TG3_FLG3_RGMII_EXT_IBND_TX_EN	0x00000400
 #define TG3_FLG3_CLKREQ_BUG		0x00000800
-#define TG3_FLG3_PHY_ENABLE_APD		0x00001000
 #define TG3_FLG3_5755_PLUS		0x00002000
 #define TG3_FLG3_NO_NVRAM		0x00004000
-#define TG3_FLG3_PHY_IS_FET		0x00010000
 #define TG3_FLG3_ENABLE_RSS		0x00020000
 #define TG3_FLG3_ENABLE_TSS		0x00040000
 #define TG3_FLG3_4G_DMA_BNDRY_BUG	0x00080000
@@ -2872,6 +2910,8 @@ struct tg3 {
 #define TG3_FLG3_SHORT_DMA_BUG		0x00200000
 #define TG3_FLG3_USE_JUMBO_BDFLAG	0x00400000
 #define TG3_FLG3_L1PLLPD_EN		0x00800000
+#define TG3_FLG3_5717_PLUS		0x01000000
+#define TG3_FLG3_APE_HAS_NCSI		0x02000000
 
 	struct timer_list		timer;
 	u16				timer_counter;
@@ -2913,6 +2953,7 @@ struct tg3 {
 	int				pcix_cap;
 	int				pcie_cap;
 	};
+	int				pcie_readrq;
 
 	struct mii_bus			*mdio_bus;
 	int				mdio_irq[PHY_MAX_ADDR];
@@ -2941,6 +2982,7 @@ struct tg3 {
 #define TG3_PHY_ID_BCM5718C		0x5c0d8a00
 #define TG3_PHY_ID_BCM5718S		0xbc050ff0
 #define TG3_PHY_ID_BCM57765		0x5c0d8a40
+#define TG3_PHY_ID_BCM5719C		0x5c0d8a20
 #define TG3_PHY_ID_BCM5906		0xdc00ac40
 #define TG3_PHY_ID_BCM8002		0x60010140
 #define TG3_PHY_ID_INVALID		0xffffffff
@@ -2964,10 +3006,34 @@ struct tg3 {
 	 (X) == TG3_PHY_ID_BCM5755 || (X) == TG3_PHY_ID_BCM5756 || \
 	 (X) == TG3_PHY_ID_BCM5906 || (X) == TG3_PHY_ID_BCM5761 || \
 	 (X) == TG3_PHY_ID_BCM5718C || (X) == TG3_PHY_ID_BCM5718S || \
-	 (X) == TG3_PHY_ID_BCM57765 || (X) == TG3_PHY_ID_BCM8002)
+	 (X) == TG3_PHY_ID_BCM57765 || (X) == TG3_PHY_ID_BCM5719C || \
+	 (X) == TG3_PHY_ID_BCM8002)
+
+	u32				phy_flags;
+#define TG3_PHYFLG_IS_LOW_POWER		0x00000001
+#define TG3_PHYFLG_IS_CONNECTED		0x00000002
+#define TG3_PHYFLG_USE_MI_INTERRUPT	0x00000004
+#define TG3_PHYFLG_PHY_SERDES		0x00000010
+#define TG3_PHYFLG_MII_SERDES		0x00000020
+#define TG3_PHYFLG_ANY_SERDES		(TG3_PHYFLG_PHY_SERDES |	\
+					TG3_PHYFLG_MII_SERDES)
+#define TG3_PHYFLG_IS_FET		0x00000040
+#define TG3_PHYFLG_10_100_ONLY		0x00000080
+#define TG3_PHYFLG_ENABLE_APD		0x00000100
+#define TG3_PHYFLG_CAPACITIVE_COUPLING	0x00000200
+#define TG3_PHYFLG_NO_ETH_WIRE_SPEED	0x00000400
+#define TG3_PHYFLG_JITTER_BUG		0x00000800
+#define TG3_PHYFLG_ADJUST_TRIM		0x00001000
+#define TG3_PHYFLG_ADC_BUG		0x00002000
+#define TG3_PHYFLG_5704_A0_BUG		0x00004000
+#define TG3_PHYFLG_BER_BUG		0x00008000
+#define TG3_PHYFLG_SERDES_PREEMPHASIS	0x00010000
+#define TG3_PHYFLG_PARALLEL_DETECT	0x00020000
+#define TG3_PHYFLG_EEE_CAP		0x00040000
 
 	u32				led_ctrl;
 	u32				phy_otp;
+	u32				setlpicnt;
 
 #define TG3_BPN_SIZE			24
 	char				board_part_number[TG3_BPN_SIZE];

@@ -15,6 +15,7 @@
 
 #include <linux/platform_device.h>
 #include <linux/davinci_emac.h>
+#include <linux/spi/spi.h>
 
 #include <mach/serial.h>
 #include <mach/edma.h>
@@ -23,9 +24,17 @@
 #include <mach/mmc.h>
 #include <mach/usb.h>
 #include <mach/pm.h>
+#include <mach/spi.h>
 
 extern void __iomem *da8xx_syscfg0_base;
 extern void __iomem *da8xx_syscfg1_base;
+
+/*
+ * If the DA850/OMAP-L138/AM18x SoC on board is of a higher speed grade
+ * (than the regular 300Mhz variant), the board code should set this up
+ * with the supported speed before calling da850_register_cpufreq().
+ */
+extern unsigned int da850_max_speed;
 
 /*
  * The cp_intc interrupt controller for the da8xx isn't in the same
@@ -64,41 +73,23 @@ extern void __iomem *da8xx_syscfg1_base;
 #define DA8XX_DDR2_CTL_BASE	0xb0000000
 #define DA8XX_ARM_RAM_BASE	0xffff0000
 
-#define PINMUX0			0x00
-#define PINMUX1			0x04
-#define PINMUX2			0x08
-#define PINMUX3			0x0c
-#define PINMUX4			0x10
-#define PINMUX5			0x14
-#define PINMUX6			0x18
-#define PINMUX7			0x1c
-#define PINMUX8			0x20
-#define PINMUX9			0x24
-#define PINMUX10		0x28
-#define PINMUX11		0x2c
-#define PINMUX12		0x30
-#define PINMUX13		0x34
-#define PINMUX14		0x38
-#define PINMUX15		0x3c
-#define PINMUX16		0x40
-#define PINMUX17		0x44
-#define PINMUX18		0x48
-#define PINMUX19		0x4c
-
 void __init da830_init(void);
 void __init da850_init(void);
 
-int da8xx_register_edma(void);
+int da830_register_edma(struct edma_rsv_info *rsv);
+int da850_register_edma(struct edma_rsv_info *rsv[2]);
 int da8xx_register_i2c(int instance, struct davinci_i2c_platform_data *pdata);
+int da8xx_register_spi(int instance, struct spi_board_info *info, unsigned len);
 int da8xx_register_watchdog(void);
 int da8xx_register_usb20(unsigned mA, unsigned potpgt);
 int da8xx_register_usb11(struct da8xx_ohci_root_hub *pdata);
 int da8xx_register_emac(void);
 int da8xx_register_lcdc(struct da8xx_lcdc_platform_data *pdata);
 int da8xx_register_mmcsd0(struct davinci_mmc_config *config);
+int da850_register_mmcsd1(struct davinci_mmc_config *config);
 void __init da8xx_register_mcasp(int id, struct snd_platform_data *pdata);
 int da8xx_register_rtc(void);
-int da850_register_cpufreq(void);
+int da850_register_cpufreq(char *async_clk);
 int da8xx_register_cpuidle(void);
 void __iomem * __init da8xx_get_mem_ctlr(void);
 int da850_register_pm(struct platform_device *pdev);
@@ -107,6 +98,9 @@ extern struct platform_device da8xx_serial_device;
 extern struct emac_platform_data da8xx_emac_pdata;
 extern struct da8xx_lcdc_platform_data sharp_lcd035q3dg01_pdata;
 extern struct da8xx_lcdc_platform_data sharp_lk043t1dg01_pdata;
+extern struct davinci_spi_platform_data da8xx_spi_pdata[];
+
+extern struct platform_device da8xx_wdt_device;
 
 extern const short da830_emif25_pins[];
 extern const short da830_spi0_pins[];
@@ -133,23 +127,8 @@ extern const short da830_ecap2_pins[];
 extern const short da830_eqep0_pins[];
 extern const short da830_eqep1_pins[];
 
-extern const short da850_uart0_pins[];
-extern const short da850_uart1_pins[];
-extern const short da850_uart2_pins[];
 extern const short da850_i2c0_pins[];
 extern const short da850_i2c1_pins[];
-extern const short da850_cpgmac_pins[];
-extern const short da850_rmii_pins[];
-extern const short da850_mcasp_pins[];
 extern const short da850_lcdcntl_pins[];
-extern const short da850_mmcsd0_pins[];
-extern const short da850_nand_pins[];
-extern const short da850_nor_pins[];
-
-#ifdef CONFIG_DAVINCI_MUX
-int da8xx_pinmux_setup(const short pins[]);
-#else
-static inline int da8xx_pinmux_setup(const short pins[]) { return 0; }
-#endif
 
 #endif /* __ASM_ARCH_DAVINCI_DA8XX_H */

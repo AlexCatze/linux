@@ -168,7 +168,7 @@ static inline struct net_device *bpq_get_ax25_dev(struct net_device *dev)
 
 static inline int dev_is_ethdev(struct net_device *dev)
 {
-	return (dev->type == ARPHRD_ETHER && strncmp(dev->name, "dummy", 5));
+	return dev->type == ARPHRD_ETHER && strncmp(dev->name, "dummy", 5);
 }
 
 /* ------------------------------------------------------------------------ */
@@ -400,13 +400,14 @@ static void *bpq_seq_start(struct seq_file *seq, loff_t *pos)
 static void *bpq_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 {
 	struct list_head *p;
+	struct bpqdev *bpqdev = v;
 
 	++*pos;
 
 	if (v == SEQ_START_TOKEN)
-		p = rcu_dereference(bpq_devices.next);
+		p = rcu_dereference(list_next_rcu(&bpq_devices));
 	else
-		p = rcu_dereference(((struct bpqdev *)v)->bpq_list.next);
+		p = rcu_dereference(list_next_rcu(&bpqdev->bpq_list));
 
 	return (p == &bpq_devices) ? NULL 
 		: list_entry(p, struct bpqdev, bpq_list);

@@ -1,5 +1,5 @@
 #define	USE_PCI_CLOCK
-static char rcsid[] = 
+static const char rcsid[] =
 "Revision: 3.4.5 Date: 2002/03/07 ";
 
 /*
@@ -396,7 +396,7 @@ static void tx1_dma_buf_check(pc300_t * card, int ch)
 	u16 next_bd = card->chan[ch].tx_next_bd;
 	u32 scabase = card->hw.scabase;
 
-	printk ("\nnfree_tx_bd = %d \n", card->chan[ch].nfree_tx_bd);
+	printk ("\nnfree_tx_bd = %d\n", card->chan[ch].nfree_tx_bd);
 	printk("#CH%d: f_bd = %d(0x%08x), n_bd = %d(0x%08x)\n", ch,
 	       first_bd, TX_BD_ADDR(ch, first_bd),
 	       next_bd, TX_BD_ADDR(ch, next_bd));
@@ -451,11 +451,11 @@ static int dma_get_rx_frame_size(pc300_t * card, int ch)
 		if ((status & DST_EOM) || (first_bd == card->chan[ch].rx_last_bd)) {
 			/* Return the size of a good frame or incomplete bad frame 
 			* (dma_buf_read will clean the buffer descriptors in this case). */
-			return (rcvd);
+			return rcvd;
 		}
 		ptdescr = (card->hw.rambase + cpc_readl(&ptdescr->next));
 	}
-	return (-1);
+	return -1;
 }
 
 /*
@@ -557,7 +557,7 @@ static int dma_buf_read(pc300_t * card, int ch, struct sk_buff *skb)
 		cpc_writel(card->hw.scabase + DRX_REG(EDAL, ch),
 			   RX_BD_ADDR(ch, chan->rx_last_bd));
 	}
-	return (rcvd);
+	return rcvd;
 }
 
 static void tx_dma_stop(pc300_t * card, int ch)
@@ -1733,7 +1733,7 @@ static u16 falc_pattern_test_error(pc300_t * card, int ch)
 	pc300ch_t *chan = (pc300ch_t *) & card->chan[ch];
 	falc_t *pfalc = (falc_t *) & chan->falc;
 
-	return (pfalc->bec);
+	return pfalc->bec;
 }
 
 /**********************************/
@@ -1790,7 +1790,7 @@ static void cpc_tx_timeout(struct net_device *dev)
 			   cpc_readb(card->hw.falcbase + card->hw.cpld_reg2) &
 			   ~(CPLD_REG2_FALC_LED1 << (2 * ch)));
 	}
-	dev->trans_start = jiffies;
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	CPC_UNLOCK(card, flags);
 	netif_wake_queue(dev);
 }
@@ -1849,7 +1849,6 @@ static int cpc_queue_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (d->trace_on) {
 		cpc_trace(dev, skb, 'T');
 	}
-	dev->trans_start = jiffies;
 
 	/* Start transmission */
 	CPC_LOCK(card, flags);
@@ -2820,7 +2819,7 @@ static int clock_rate_calc(u32 rate, u32 clock, int *br_io)
 	*br_io = 0;
 
 	if (rate == 0)
-		return (0);
+		return 0;
 
 	for (br = 0, br_pwr = 1; br <= 9; br++, br_pwr <<= 1) {
 		if ((tc = clock / br_pwr / rate) <= 0xff) {
@@ -2833,11 +2832,11 @@ static int clock_rate_calc(u32 rate, u32 clock, int *br_io)
 		error = ((rate - (clock / br_pwr / rate)) / rate) * 1000;
 		/* Errors bigger than +/- 1% won't be tolerated */
 		if (error < -10 || error > 10)
-			return (-1);
+			return -1;
 		else
-			return (tc);
+			return tc;
 	} else {
-		return (-1);
+		return -1;
 	}
 }
 
@@ -3208,7 +3207,7 @@ static u32 detect_ram(pc300_t * card)
 			break;
 		}
 	}
-	return (i);
+	return i;
 }
 
 static void plx_init(pc300_t * card)

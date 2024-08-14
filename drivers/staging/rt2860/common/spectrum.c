@@ -416,8 +416,7 @@ void MeasureReqTabExit(struct rt_rtmp_adapter *pAd)
 {
 	NdisFreeSpinLock(&pAd->CommonCfg.MeasureReqTabLock);
 
-	if (pAd->CommonCfg.pMeasureReqTab)
-		kfree(pAd->CommonCfg.pMeasureReqTab);
+	kfree(pAd->CommonCfg.pMeasureReqTab);
 	pAd->CommonCfg.pMeasureReqTab = NULL;
 
 	return;
@@ -614,8 +613,7 @@ void TpcReqTabExit(struct rt_rtmp_adapter *pAd)
 {
 	NdisFreeSpinLock(&pAd->CommonCfg.TpcReqTabLock);
 
-	if (pAd->CommonCfg.pTpcReqTab)
-		kfree(pAd->CommonCfg.pTpcReqTab);
+	kfree(pAd->CommonCfg.pTpcReqTab);
 	pAd->CommonCfg.pTpcReqTab = NULL;
 
 	return;
@@ -1060,8 +1058,8 @@ static void InsertMeasureReqIE(struct rt_rtmp_adapter *pAd,
 		3. Measure Token.
 		4. Measure Request Mode.
 		5. Measure Request Type.
-		6. Length of Report Infomation
-		7. Pointer of Report Infomation Buffer.
+		6. Length of Report Information
+		7. Pointer of Report Information Buffer.
 
 	Return	: None.
 	==========================================================================
@@ -1402,7 +1400,7 @@ static void StartDFSProcedure(struct rt_rtmp_adapter *pAd,
 	Parametrs:
 		1. MLME message containing the received frame
 		2. message length.
-		3. Channel switch announcement infomation buffer.
+		3. Channel switch announcement information buffer.
 
 	Return	: None.
 	==========================================================================
@@ -1467,7 +1465,7 @@ static BOOLEAN PeerChSwAnnSanity(struct rt_rtmp_adapter *pAd,
 	Parametrs:
 		1. MLME message containing the received frame
 		2. message length.
-		3. Measurement request infomation buffer.
+		3. Measurement request information buffer.
 
 	Return	: None.
 	==========================================================================
@@ -1540,8 +1538,8 @@ static BOOLEAN PeerMeasureReqSanity(struct rt_rtmp_adapter *pAd,
 	Parametrs:
 		1. MLME message containing the received frame
 		2. message length.
-		3. Measurement report infomation buffer.
-		4. basic report infomation buffer.
+		3. Measurement report information buffer.
+		4. basic report information buffer.
 
 	Return	: None.
 	==========================================================================
@@ -1837,7 +1835,7 @@ static void PeerChSwAnnAction(struct rt_rtmp_adapter *pAd, struct rt_mlme_queue_
 			}
 
 			if (index >= pAd->ChannelListNum) {
-				DBGPRINT_ERR(("&&&&&&&&&&&&&&&&&&&&&&&&&&PeerChSwAnnAction(can not find New Channel=%d in ChannelList[%d]\n", pAd->CommonCfg.Channel, pAd->ChannelListNum));
+				DBGPRINT_ERR("&&&&&&&&&&&&&&&&&&&&&&&&&&PeerChSwAnnAction(can not find New Channel=%d in ChannelList[%d]\n", pAd->CommonCfg.Channel, pAd->ChannelListNum);
 			}
 		}
 	}
@@ -1900,8 +1898,8 @@ static void PeerMeasureReportAction(struct rt_rtmp_adapter *pAd,
 /*      if (pAd->CommonCfg.bIEEE80211H != TRUE) */
 /*              return; */
 
-	if ((pMeasureReportInfo =
-	     kmalloc(sizeof(struct rt_measure_rpi_report), GFP_ATOMIC)) == NULL) {
+	pMeasureReportInfo = kmalloc(sizeof(struct rt_measure_rpi_report), GFP_ATOMIC);
+	if (pMeasureReportInfo == NULL) {
 		DBGPRINT(RT_DEBUG_ERROR,
 			 ("%s unable to alloc memory for measure report buffer (size=%zu).\n",
 			  __func__, sizeof(struct rt_measure_rpi_report)));
@@ -2016,7 +2014,8 @@ static void PeerTpcRepAction(struct rt_rtmp_adapter *pAd, struct rt_mlme_queue_e
 	NdisZeroMemory(&TpcRepInfo, sizeof(struct rt_tpc_report_info));
 	if (PeerTpcRepSanity
 	    (pAd, Elem->Msg, Elem->MsgLen, &DialogToken, &TpcRepInfo)) {
-		if ((pEntry = TpcReqLookUp(pAd, DialogToken)) != NULL) {
+		pEntry = TpcReqLookUp(pAd, DialogToken);
+		if (pEntry != NULL) {
 			TpcReqDelete(pAd, pEntry->DialogToken);
 			DBGPRINT(RT_DEBUG_TRACE,
 				 ("%s: DialogToken=%x, TxPwr=%d, LinkMargin=%d\n",

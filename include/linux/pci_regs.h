@@ -223,7 +223,7 @@
 #define  PCI_PM_CAP_PME_CLOCK	0x0008	/* PME clock required */
 #define  PCI_PM_CAP_RESERVED    0x0010  /* Reserved field */
 #define  PCI_PM_CAP_DSI		0x0020	/* Device specific initialization */
-#define  PCI_PM_CAP_AUX_POWER	0x01C0	/* Auxilliary power support mask */
+#define  PCI_PM_CAP_AUX_POWER	0x01C0	/* Auxiliary power support mask */
 #define  PCI_PM_CAP_D1		0x0200	/* D1 power state support */
 #define  PCI_PM_CAP_D2		0x0400	/* D2 power state support */
 #define  PCI_PM_CAP_PME		0x0800	/* PME pin supported */
@@ -300,12 +300,22 @@
 #define PCI_MSI_DATA_64		12	/* 16 bits of data for 64-bit devices */
 #define PCI_MSI_MASK_64		16	/* Mask bits register for 64-bit devices */
 
-/* MSI-X registers (these are at offset PCI_MSIX_FLAGS) */
+/* MSI-X registers */
 #define PCI_MSIX_FLAGS		2
 #define  PCI_MSIX_FLAGS_QSIZE	0x7FF
 #define  PCI_MSIX_FLAGS_ENABLE	(1 << 15)
 #define  PCI_MSIX_FLAGS_MASKALL	(1 << 14)
-#define PCI_MSIX_FLAGS_BIRMASK	(7 << 0)
+#define PCI_MSIX_TABLE		4
+#define PCI_MSIX_PBA		8
+#define  PCI_MSIX_FLAGS_BIRMASK	(7 << 0)
+
+/* MSI-X entry's format */
+#define PCI_MSIX_ENTRY_SIZE		16
+#define  PCI_MSIX_ENTRY_LOWER_ADDR	0
+#define  PCI_MSIX_ENTRY_UPPER_ADDR	4
+#define  PCI_MSIX_ENTRY_DATA		8
+#define  PCI_MSIX_ENTRY_VECTOR_CTRL	12
+#define   PCI_MSIX_ENTRY_CTRL_MASKBIT	1
 
 /* CompactPCI Hotswap Register */
 
@@ -425,7 +435,7 @@
 #define  PCI_EXP_LNKCAP_L0SEL	0x00007000 /* L0s Exit Latency */
 #define  PCI_EXP_LNKCAP_L1EL	0x00038000 /* L1 Exit Latency */
 #define  PCI_EXP_LNKCAP_CLKPM	0x00040000 /* L1 Clock Power Management */
-#define  PCI_EXP_LNKCAP_SDERC	0x00080000 /* Suprise Down Error Reporting Capable */
+#define  PCI_EXP_LNKCAP_SDERC	0x00080000 /* Surprise Down Error Reporting Capable */
 #define  PCI_EXP_LNKCAP_DLLLARC	0x00100000 /* Data Link Layer Link Active Reporting Capable */
 #define  PCI_EXP_LNKCAP_LBNC	0x00200000 /* Link Bandwidth Notification Capability */
 #define  PCI_EXP_LNKCAP_PN	0xff000000 /* Port Number */
@@ -442,7 +452,10 @@
 #define  PCI_EXP_LNKCTL_LABIE	0x0800	/* Lnk Autonomous Bandwidth Interrupt Enable */
 #define PCI_EXP_LNKSTA		18	/* Link Status */
 #define  PCI_EXP_LNKSTA_CLS	0x000f	/* Current Link Speed */
+#define  PCI_EXP_LNKSTA_CLS_2_5GB 0x01	/* Current Link Speed 2.5GT/s */
+#define  PCI_EXP_LNKSTA_CLS_5_0GB 0x02	/* Current Link Speed 5.0GT/s */
 #define  PCI_EXP_LNKSTA_NLW	0x03f0	/* Nogotiated Link Width */
+#define  PCI_EXP_LNKSTA_NLW_SHIFT 4	/* start of NLW mask in link status */
 #define  PCI_EXP_LNKSTA_LT	0x0800	/* Link Training */
 #define  PCI_EXP_LNKSTA_SLC	0x1000	/* Slot Clock Configuration */
 #define  PCI_EXP_LNKSTA_DLLLA	0x2000	/* Data Link Layer Link Active */
@@ -491,6 +504,8 @@
 #define  PCI_EXP_RTCTL_CRSSVE	0x10	/* CRS Software Visibility Enable */
 #define PCI_EXP_RTCAP		30	/* Root Capabilities */
 #define PCI_EXP_RTSTA		32	/* Root Status */
+#define PCI_EXP_RTSTA_PME	0x10000 /* PME status */
+#define PCI_EXP_RTSTA_PENDING	0x20000 /* PME pending */
 #define PCI_EXP_DEVCAP2		36	/* Device Capabilities 2 */
 #define  PCI_EXP_DEVCAP2_ARI	0x20	/* Alternative Routing-ID */
 #define PCI_EXP_DEVCTL2		40	/* Device Control 2 */
@@ -563,8 +578,7 @@
 #define PCI_ERR_ROOT_FIRST_FATAL	0x00000010	/* First Fatal */
 #define PCI_ERR_ROOT_NONFATAL_RCV	0x00000020	/* Non-Fatal Received */
 #define PCI_ERR_ROOT_FATAL_RCV		0x00000040	/* Fatal Received */
-#define PCI_ERR_ROOT_COR_SRC	52
-#define PCI_ERR_ROOT_SRC	54
+#define PCI_ERR_ROOT_ERR_SRC	52	/* Error Source Identification */
 
 /* Virtual Channel */
 #define PCI_VC_PORT_REG1	4

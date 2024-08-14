@@ -154,15 +154,10 @@ int __btrfs_setxattr(struct btrfs_trans_handle *trans,
 	if (trans)
 		return do_setxattr(trans, inode, name, value, size, flags);
 
-	ret = btrfs_reserve_metadata_space(root, 2);
-	if (ret)
-		return ret;
+	trans = btrfs_start_transaction(root, 2);
+	if (IS_ERR(trans))
+		return PTR_ERR(trans);
 
-	trans = btrfs_start_transaction(root, 1);
-	if (!trans) {
-		ret = -ENOMEM;
-		goto out;
-	}
 	btrfs_set_trans_block_group(trans, inode);
 
 	ret = do_setxattr(trans, inode, name, value, size, flags);
@@ -174,7 +169,6 @@ int __btrfs_setxattr(struct btrfs_trans_handle *trans,
 	BUG_ON(ret);
 out:
 	btrfs_end_transaction_throttle(trans, root);
-	btrfs_unreserve_metadata_space(root, 2);
 	return ret;
 }
 
@@ -184,14 +178,12 @@ ssize_t btrfs_listxattr(struct dentry *dentry, char *buffer, size_t size)
 	struct inode *inode = dentry->d_inode;
 	struct btrfs_root *root = BTRFS_I(inode)->root;
 	struct btrfs_path *path;
-	struct btrfs_item *item;
 	struct extent_buffer *leaf;
 	struct btrfs_dir_item *di;
-	int ret = 0, slot, advance;
+	int ret = 0, slot;
 	size_t total_size = 0, size_left = size;
 	unsigned long name_ptr;
 	size_t name_len;
-	u32 nritems;
 
 	/*
 	 * ok we want all objects associated with this id.
@@ -211,36 +203,25 @@ ssize_t btrfs_listxattr(struct dentry *dentry, char *buffer, size_t size)
 	ret = btrfs_search_slot(NULL, root, &key, path, 0, 0);
 	if (ret < 0)
 		goto err;
-	advance = 0;
+
 	while (1) {
 		leaf = path->nodes[0];
-		nritems = btrfs_header_nritems(leaf);
 		slot = path->slots[0];
 
 		/* this is where we start walking through the path */
-		if (advance || slot >= nritems) {
+		if (slot >= btrfs_header_nritems(leaf)) {
 			/*
 			 * if we've reached the last slot in this leaf we need
 			 * to go to the next leaf and reset everything
 			 */
-			if (slot >= nritems-1) {
-				ret = btrfs_next_leaf(root, path);
-				if (ret)
-					break;
-				leaf = path->nodes[0];
-				nritems = btrfs_header_nritems(leaf);
-				slot = path->slots[0];
-			} else {
-				/*
-				 * just walking through the slots on this leaf
-				 */
-				slot++;
-				path->slots[0]++;
-			}
+			ret = btrfs_next_leaf(root, path);
+			if (ret < 0)
+				goto err;
+			else if (ret > 0)
+				break;
+			continue;
 		}
-		advance = 1;
 
-		item = btrfs_item_nr(leaf, slot);
 		btrfs_item_key_to_cpu(leaf, &found_key, slot);
 
 		/* check to make sure this item is what we want */
@@ -250,13 +231,15 @@ ssize_t btrfs_listxattr(struct dentry *dentry, char *buffer, size_t size)
 			break;
 
 		di = btrfs_item_ptr(leaf, slot, struct btrfs_dir_item);
+		if (verify_dir_item(root, leaf, di))
+			continue;
 
 		name_len = btrfs_dir_name_len(leaf, di);
 		total_size += name_len + 1;
 
 		/* we are just looking for how big our buffer needs to be */
 		if (!size)
-			continue;
+			goto next;
 
 		if (!buffer || (name_len + 1) > size_left) {
 			ret = -ERANGE;
@@ -269,6 +252,8 @@ ssize_t btrfs_listxattr(struct dentry *dentry, char *buffer, size_t size)
 
 		size_left -= name_len + 1;
 		buffer += name_len + 1;
+next:
+		path->slots[0]++;
 	}
 	ret = total_size;
 
@@ -282,7 +267,7 @@ err:
  * List of handlers for synthetic system.* attributes.  All real ondisk
  * attributes are handled directly.
  */
-struct xattr_handler *btrfs_xattr_handlers[] = {
+const struct xattr_handler *btrfs_xattr_handlers[] = {
 #ifdef CONFIG_BTRFS_FS_POSIX_ACL
 	&btrfs_xattr_acl_access_handler,
 	&btrfs_xattr_acl_default_handler,
@@ -324,6 +309,15 @@ ssize_t btrfs_getxattr(struct dentry *dentry, const char *name,
 int btrfs_setxattr(struct dentry *dentry, const char *name, const void *value,
 		   size_t size, int flags)
 {
+	struct btrfs_root *root = BTRFS_I(dentry->d_inode)->root;
+
+	/*
+	 * The permission on security.* and system.* is not checked
+	 * in permission().
+	 */
+	if (btrfs_root_readonly(root))
+		return -EROFS;
+
 	/*
 	 * If this is a request for a synthetic attribute in the system.*
 	 * namespace use the generic infrastructure to resolve a handler
@@ -344,6 +338,15 @@ int btrfs_setxattr(struct dentry *dentry, const char *name, const void *value,
 
 int btrfs_removexattr(struct dentry *dentry, const char *name)
 {
+	struct btrfs_root *root = BTRFS_I(dentry->d_inode)->root;
+
+	/*
+	 * The permission on security.* and system.* is not checked
+	 * in permission().
+	 */
+	if (btrfs_root_readonly(root))
+		return -EROFS;
+
 	/*
 	 * If this is a request for a synthetic attribute in the system.*
 	 * namespace use the generic infrastructure to resolve a handler
@@ -360,7 +363,8 @@ int btrfs_removexattr(struct dentry *dentry, const char *name)
 }
 
 int btrfs_xattr_security_init(struct btrfs_trans_handle *trans,
-			      struct inode *inode, struct inode *dir)
+			      struct inode *inode, struct inode *dir,
+			      const struct qstr *qstr)
 {
 	int err;
 	size_t len;
@@ -368,7 +372,8 @@ int btrfs_xattr_security_init(struct btrfs_trans_handle *trans,
 	char *suffix;
 	char *name;
 
-	err = security_inode_init_security(inode, dir, &suffix, &value, &len);
+	err = security_inode_init_security(inode, dir, qstr, &suffix, &value,
+					   &len);
 	if (err) {
 		if (err == -EOPNOTSUPP)
 			return 0;

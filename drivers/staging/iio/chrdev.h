@@ -33,7 +33,7 @@ struct iio_handler {
 /**
  * struct iio_event_data - The actual event being pushed to userspace
  * @id:		event identifier
- * @timestamp:	best estimate of time of event occurance (often from
+ * @timestamp:	best estimate of time of event occurrence (often from
  *		the interrupt handler)
  */
 struct iio_event_data {
@@ -42,7 +42,7 @@ struct iio_event_data {
 };
 
 /**
- * struct iio_detected_event_list - list element for events that have occured
+ * struct iio_detected_event_list - list element for events that have occurred
  * @list:		linked list header
  * @ev:			the event itself
  * @shared_pointer:	used when the event is shared - i.e. can be escallated
@@ -73,9 +73,6 @@ struct iio_shared_ev_pointer {
  * @det_events:		list of detected events
  * @max_events:		maximum number of events before new ones are dropped
  * @current_events:	number of events in detected list
- * @id:			indentifier to allow the event interface to know which
- *			physical line it corresponds to
- * @attr:		this chrdev's minor number sysfs attribute
  * @owner:		ensure the driver module owns the file, not iio
  * @private:		driver specific data
  * @_name:		used internally to store the sysfs name for minor id
@@ -90,11 +87,9 @@ struct iio_event_interface {
 	struct iio_detected_event_list		det_events;
 	int					max_events;
 	int					current_events;
-	int					id;
-	struct iio_chrdev_minor_attr		attr;
 	struct module				*owner;
 	void					*private;
-	char					_name[20];
+	char					_name[35];
 	char					_attrname[20];
 };
 
@@ -103,7 +98,7 @@ struct iio_event_interface {
  * @list:		list header
  * @refcount:		as the handler may be shared between multiple device
  *			side events, reference counting ensures clean removal
- * @exist_lock:		prevents race conditions related to refcount useage.
+ * @exist_lock:		prevents race conditions related to refcount usage.
  * @handler:		event handler function - called on event if this
  *			event_handler is enabled.
  *

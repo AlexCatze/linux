@@ -161,8 +161,6 @@ static void lec_handle_bridge(struct sk_buff *skb, struct net_device *dev)
 		skb_queue_tail(&sk->sk_receive_queue, skb2);
 		sk->sk_data_ready(sk, skb2->len);
 	}
-
-	return;
 }
 #endif /* defined(CONFIG_BRIDGE) || defined(CONFIG_BRIDGE_MODULE) */
 
@@ -222,7 +220,6 @@ static unsigned char *get_tr_dst(unsigned char *packet, unsigned char *rdesc)
 static int lec_open(struct net_device *dev)
 {
 	netif_start_queue(dev);
-	memset(&dev->stats, 0, sizeof(struct net_device_stats));
 
 	return 0;
 }
@@ -640,7 +637,6 @@ static void lec_set_multicast_list(struct net_device *dev)
 	 * by default, all multicast frames arrive over the bus.
 	 * eventually support selective multicast service
 	 */
-	return;
 }
 
 static const struct net_device_ops lec_netdev_ops = {
@@ -820,8 +816,7 @@ static int lec_mcast_attach(struct atm_vcc *vcc, int arg)
 	if (arg < 0 || arg >= MAX_LEC_ITF || !dev_lec[arg])
 		return -EINVAL;
 	vcc->proto_data = dev_lec[arg];
-	return lec_mcast_make((struct lec_priv *)netdev_priv(dev_lec[arg]),
-				vcc);
+	return lec_mcast_make(netdev_priv(dev_lec[arg]), vcc);
 }
 
 /* Initialize device. */
@@ -1199,8 +1194,6 @@ static void __exit lane_module_cleanup(void)
 			dev_lec[i] = NULL;
 		}
 	}
-
-	return;
 }
 
 module_init(lane_module_init);
@@ -1334,7 +1327,6 @@ static void lane2_associate_ind(struct net_device *dev, const u8 *mac_addr,
 		priv->lane2_ops->associate_indicator(dev, mac_addr,
 						     tlvs, sizeoftlvs);
 	}
-	return;
 }
 
 /*
@@ -1615,7 +1607,7 @@ static void lec_arp_destroy(struct lec_priv *priv)
 	struct lec_arp_table *entry;
 	int i;
 
-	cancel_rearming_delayed_work(&priv->lec_arp_work);
+	cancel_delayed_work_sync(&priv->lec_arp_work);
 
 	/*
 	 * Remove all entries

@@ -31,7 +31,7 @@ static struct clocksource clocksource_cyclone = {
         .rating         = 300,
         .read           = read_cyclone,
         .mask           = (1LL << 40) - 1,
-        .mult           = 0, /*to be caluclated*/
+        .mult           = 0, /*to be calculated*/
         .shift          = 16,
         .flags          = CLOCK_SOURCE_IS_CONTINUOUS,
 };
@@ -59,13 +59,13 @@ int __init init_cyclone_clock(void)
 		return -ENODEV;
 	}
 	base = readq(reg);
+	iounmap(reg);
 	if(!base){
 		printk(KERN_ERR "Summit chipset: Could not find valid CBAR"
 				" value.\n");
 		use_cyclone = 0;
 		return -ENODEV;
 	}
-	iounmap(reg);
 
 	/* setup PMCC */
 	offset = (base + CYCLONE_PMCC_OFFSET);

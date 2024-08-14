@@ -19,12 +19,15 @@
 #include <linux/seq_file.h>
 #include <linux/screen_info.h>
 #include <linux/init.h>
+#include <linux/kexec.h>
+#include <linux/crash_dump.h>
 #include <linux/root_dev.h>
 #include <linux/cpu.h>
 #include <linux/interrupt.h>
 #include <linux/smp.h>
 #include <linux/fs.h>
 #include <linux/proc_fs.h>
+#include <linux/memblock.h>
 
 #include <asm/unified.h>
 #include <asm/cpu.h>
@@ -33,6 +36,7 @@
 #include <asm/procinfo.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
+#include <asm/smp_plat.h>
 #include <asm/mach-types.h>
 #include <asm/cacheflush.h>
 #include <asm/cachetype.h>
@@ -44,7 +48,9 @@
 #include <asm/traps.h>
 #include <asm/unwind.h>
 
+#if defined(CONFIG_DEPRECATED_PARAM_STRUCT)
 #include "compat.h"
+#endif
 #include "atags.h"
 #include "tcm.h"
 
@@ -69,9 +75,9 @@ extern void reboot_setup(char *str);
 
 unsigned int processor_id;
 EXPORT_SYMBOL(processor_id);
-unsigned int __machine_arch_type;
+unsigned int __machine_arch_type __read_mostly;
 EXPORT_SYMBOL(__machine_arch_type);
-unsigned int cacheid;
+unsigned int cacheid __read_mostly;
 EXPORT_SYMBOL(cacheid);
 
 unsigned int __atags_pointer __initdata;
@@ -85,24 +91,24 @@ EXPORT_SYMBOL(system_serial_low);
 unsigned int system_serial_high;
 EXPORT_SYMBOL(system_serial_high);
 
-unsigned int elf_hwcap;
+unsigned int elf_hwcap __read_mostly;
 EXPORT_SYMBOL(elf_hwcap);
 
 
 #ifdef MULTI_CPU
-struct processor processor;
+struct processor processor __read_mostly;
 #endif
 #ifdef MULTI_TLB
-struct cpu_tlb_fns cpu_tlb;
+struct cpu_tlb_fns cpu_tlb __read_mostly;
 #endif
 #ifdef MULTI_USER
-struct cpu_user_fns cpu_user;
+struct cpu_user_fns cpu_user __read_mostly;
 #endif
 #ifdef MULTI_CACHE
-struct cpu_cache_fns cpu_cache;
+struct cpu_cache_fns cpu_cache __read_mostly;
 #endif
 #ifdef CONFIG_OUTER_CACHE
-struct outer_cache_fns outer_cache;
+struct outer_cache_fns outer_cache __read_mostly;
 EXPORT_SYMBOL(outer_cache);
 #endif
 
@@ -120,6 +126,7 @@ EXPORT_SYMBOL(elf_platform);
 static const char *cpu_name;
 static const char *machine_name;
 static char __initdata cmd_line[COMMAND_LINE_SIZE];
+struct machine_desc *machine_desc __initdata;
 
 static char default_command_line[COMMAND_LINE_SIZE] __initdata = CONFIG_CMDLINE;
 static union { char c[4]; unsigned long l; } endian_test __initdata = { { 'l', '?', '?', 'b' } };
@@ -219,8 +226,8 @@ int cpu_architecture(void)
 		 * Register 0 and check for VMSAv7 or PMSAv7 */
 		asm("mrc	p15, 0, %0, c0, c1, 4"
 		    : "=r" (mmfr0));
-		if ((mmfr0 & 0x0000000f) == 0x00000003 ||
-		    (mmfr0 & 0x000000f0) == 0x00000030)
+		if ((mmfr0 & 0x0000000f) >= 0x00000003 ||
+		    (mmfr0 & 0x000000f0) >= 0x00000030)
 			cpu_arch = CPU_ARCH_ARMv7;
 		else if ((mmfr0 & 0x0000000f) == 0x00000002 ||
 			 (mmfr0 & 0x000000f0) == 0x00000020)
@@ -231,6 +238,35 @@ int cpu_architecture(void)
 		cpu_arch = CPU_ARCH_UNKNOWN;
 
 	return cpu_arch;
+}
+
+static int cpu_has_aliasing_icache(unsigned int arch)
+{
+	int aliasing_icache;
+	unsigned int id_reg, num_sets, line_size;
+
+	/* arch specifies the register format */
+	switch (arch) {
+	case CPU_ARCH_ARMv7:
+		asm("mcr	p15, 2, %0, c0, c0, 0 @ set CSSELR"
+		    : /* No output operands */
+		    : "r" (1));
+		isb();
+		asm("mrc	p15, 1, %0, c0, c0, 0 @ read CCSIDR"
+		    : "=r" (id_reg));
+		line_size = 4 << ((id_reg & 0x7) + 2);
+		num_sets = ((id_reg >> 13) & 0x7fff) + 1;
+		aliasing_icache = (line_size * num_sets) > PAGE_SIZE;
+		break;
+	case CPU_ARCH_ARMv6:
+		aliasing_icache = read_cpuid_cachetype() & (1 << 11);
+		break;
+	default:
+		/* I-cache aliases will be handled by D-cache aliasing code */
+		aliasing_icache = 0;
+	}
+
+	return aliasing_icache;
 }
 
 static void __init cacheid_init(void)
@@ -244,10 +280,15 @@ static void __init cacheid_init(void)
 			cacheid = CACHEID_VIPT_NONALIASING;
 			if ((cachetype & (3 << 14)) == 1 << 14)
 				cacheid |= CACHEID_ASID_TAGGED;
-		} else if (cachetype & (1 << 23))
+			else if (cpu_has_aliasing_icache(CPU_ARCH_ARMv7))
+				cacheid |= CACHEID_VIPT_I_ALIASING;
+		} else if (cachetype & (1 << 23)) {
 			cacheid = CACHEID_VIPT_ALIASING;
-		else
+		} else {
 			cacheid = CACHEID_VIPT_NONALIASING;
+			if (cpu_has_aliasing_icache(CPU_ARCH_ARMv6))
+				cacheid |= CACHEID_VIPT_I_ALIASING;
+		}
 	} else {
 		cacheid = CACHEID_VIVT;
 	}
@@ -258,7 +299,7 @@ static void __init cacheid_init(void)
 		cache_is_vipt_nonaliasing() ? "VIPT nonaliasing" : "unknown",
 		cache_is_vivt() ? "VIVT" :
 		icache_is_vivt_asid_tagged() ? "VIVT ASID tagged" :
-		cache_is_vipt_aliasing() ? "VIPT aliasing" :
+		icache_is_vipt_aliasing() ? "VIPT aliasing" :
 		cache_is_vipt_nonaliasing() ? "VIPT nonaliasing" : "unknown");
 }
 
@@ -267,7 +308,37 @@ static void __init cacheid_init(void)
  * already provide the required functionality.
  */
 extern struct proc_info_list *lookup_processor_type(unsigned int);
-extern struct machine_desc *lookup_machine_type(unsigned int);
+
+static void __init early_print(const char *str, ...)
+{
+	extern void printascii(const char *);
+	char buf[256];
+	va_list ap;
+
+	va_start(ap, str);
+	vsnprintf(buf, sizeof(buf), str, ap);
+	va_end(ap);
+
+#ifdef CONFIG_DEBUG_LL
+	printascii(buf);
+#endif
+	printk("%s", buf);
+}
+
+static void __init feat_v6_fixup(void)
+{
+	int id = read_cpuid_id();
+
+	if ((id & 0xff0f0000) != 0x41070000)
+		return;
+
+	/*
+	 * HWCAP_TLS is available only on 1136 r1p0 and later,
+	 * see also kuser_get_tls_init.
+	 */
+	if ((((id >> 4) & 0xfff) == 0xb36) && (((id >> 20) & 3) == 0))
+		elf_hwcap &= ~HWCAP_TLS;
+}
 
 static void __init setup_processor(void)
 {
@@ -310,6 +381,8 @@ static void __init setup_processor(void)
 #ifndef CONFIG_ARM_THUMB
 	elf_hwcap &= ~HWCAP_THUMB;
 #endif
+
+	feat_v6_fixup();
 
 	cacheid_init();
 	cpu_proc_init();
@@ -368,30 +441,38 @@ void cpu_init(void)
 
 static struct machine_desc * __init setup_machine(unsigned int nr)
 {
-	struct machine_desc *list;
+	extern struct machine_desc __arch_info_begin[], __arch_info_end[];
+	struct machine_desc *p;
 
 	/*
 	 * locate machine in the list of supported machines.
 	 */
-	list = lookup_machine_type(nr);
-	if (!list) {
-		printk("Machine configuration botched (nr %d), unable "
-		       "to continue.\n", nr);
-		while (1);
-	}
+	for (p = __arch_info_begin; p < __arch_info_end; p++)
+		if (nr == p->nr) {
+			printk("Machine: %s\n", p->name);
+			return p;
+		}
 
-	printk("Machine: %s\n", list->name);
+	early_print("\n"
+		"Error: unrecognized/unsupported machine ID (r1 = 0x%08x).\n\n"
+		"Available machine support:\n\nID (hex)\tNAME\n", nr);
 
-	return list;
+	for (p = __arch_info_begin; p < __arch_info_end; p++)
+		early_print("%08x\t%s\n", p->nr, p->name);
+
+	early_print("\nPlease check your kernel config and/or bootloader.\n");
+
+	while (true)
+		/* can't use cpu_relax() here as it may require MMU setup */;
 }
 
-static int __init arm_add_memory(unsigned long start, unsigned long size)
+static int __init arm_add_memory(phys_addr_t start, unsigned long size)
 {
 	struct membank *bank = &meminfo.bank[meminfo.nr_banks];
 
 	if (meminfo.nr_banks >= NR_BANKS) {
 		printk(KERN_CRIT "NR_BANKS too low, "
-			"ignoring memory at %#lx\n", start);
+			"ignoring memory at 0x%08llx\n", (long long)start);
 		return -EINVAL;
 	}
 
@@ -402,13 +483,12 @@ static int __init arm_add_memory(unsigned long start, unsigned long size)
 	size -= start & ~PAGE_MASK;
 	bank->start = PAGE_ALIGN(start);
 	bank->size  = size & PAGE_MASK;
-	bank->node  = PHYS_TO_NID(start);
 
 	/*
 	 * Check whether this memory region has non-zero size or
 	 * invalid node number.
 	 */
-	if (bank->size == 0 || bank->node >= MAX_NUMNODES)
+	if (bank->size == 0)
 		return -EINVAL;
 
 	meminfo.nr_banks++;
@@ -422,7 +502,8 @@ static int __init arm_add_memory(unsigned long start, unsigned long size)
 static int __init early_mem(char *p)
 {
 	static int usermem __initdata = 0;
-	unsigned long size, start;
+	unsigned long size;
+	phys_addr_t start;
 	char *endp;
 
 	/*
@@ -461,25 +542,21 @@ setup_ramdisk(int doload, int prompt, int image_start, unsigned int rd_sz)
 #endif
 }
 
-static void __init
-request_standard_resources(struct meminfo *mi, struct machine_desc *mdesc)
+static void __init request_standard_resources(struct machine_desc *mdesc)
 {
+	struct memblock_region *region;
 	struct resource *res;
-	int i;
 
 	kernel_code.start   = virt_to_phys(_text);
 	kernel_code.end     = virt_to_phys(_etext - 1);
-	kernel_data.start   = virt_to_phys(_data);
+	kernel_data.start   = virt_to_phys(_sdata);
 	kernel_data.end     = virt_to_phys(_end - 1);
 
-	for (i = 0; i < mi->nr_banks; i++) {
-		if (mi->bank[i].size == 0)
-			continue;
-
+	for_each_memblock(memory, region) {
 		res = alloc_bootmem_low(sizeof(*res));
 		res->name  = "System RAM";
-		res->start = mi->bank[i].start;
-		res->end   = mi->bank[i].start + mi->bank[i].size - 1;
+		res->start = __pfn_to_phys(memblock_region_memory_base_pfn(region));
+		res->end = __pfn_to_phys(memblock_region_memory_end_pfn(region)) - 1;
 		res->flags = IORESOURCE_MEM | IORESOURCE_BUSY;
 
 		request_resource(&iomem_resource, res);
@@ -595,7 +672,11 @@ __tagtable(ATAG_REVISION, parse_tag_revision);
 
 static int __init parse_tag_cmdline(const struct tag *tag)
 {
+#ifndef CONFIG_CMDLINE_FORCE
 	strlcpy(default_command_line, tag->u.cmdline.cmdline, COMMAND_LINE_SIZE);
+#else
+	pr_warning("Ignoring tag cmdline (using the default kernel command line)\n");
+#endif /* CONFIG_CMDLINE_FORCE */
 	return 0;
 }
 
@@ -646,20 +727,74 @@ static struct init_tags {
 	{ tag_size(tag_core), ATAG_CORE },
 	{ 1, PAGE_SIZE, 0xff },
 	{ tag_size(tag_mem32), ATAG_MEM },
-	{ MEM_SIZE, PHYS_OFFSET },
+	{ MEM_SIZE },
 	{ 0, ATAG_NONE }
 };
-
-static void (*init_machine)(void) __initdata;
 
 static int __init customize_machine(void)
 {
 	/* customizes platform devices, or adds new ones */
-	if (init_machine)
-		init_machine();
+	if (machine_desc->init_machine)
+		machine_desc->init_machine();
 	return 0;
 }
 arch_initcall(customize_machine);
+
+#ifdef CONFIG_KEXEC
+static inline unsigned long long get_total_mem(void)
+{
+	unsigned long total;
+
+	total = max_low_pfn - min_low_pfn;
+	return total << PAGE_SHIFT;
+}
+
+/**
+ * reserve_crashkernel() - reserves memory are for crash kernel
+ *
+ * This function reserves memory area given in "crashkernel=" kernel command
+ * line parameter. The memory reserved is used by a dump capture kernel when
+ * primary kernel is crashing.
+ */
+static void __init reserve_crashkernel(void)
+{
+	unsigned long long crash_size, crash_base;
+	unsigned long long total_mem;
+	int ret;
+
+	total_mem = get_total_mem();
+	ret = parse_crashkernel(boot_command_line, total_mem,
+				&crash_size, &crash_base);
+	if (ret)
+		return;
+
+	ret = reserve_bootmem(crash_base, crash_size, BOOTMEM_EXCLUSIVE);
+	if (ret < 0) {
+		printk(KERN_WARNING "crashkernel reservation failed - "
+		       "memory is in use (0x%lx)\n", (unsigned long)crash_base);
+		return;
+	}
+
+	printk(KERN_INFO "Reserving %ldMB of memory at %ldMB "
+	       "for crashkernel (System RAM: %ldMB)\n",
+	       (unsigned long)(crash_size >> 20),
+	       (unsigned long)(crash_base >> 20),
+	       (unsigned long)(total_mem >> 20));
+
+	crashk_res.start = crash_base;
+	crashk_res.end = crash_base + crash_size - 1;
+	insert_resource(&iomem_resource, &crashk_res);
+}
+#else
+static inline void reserve_crashkernel(void) {}
+#endif /* CONFIG_KEXEC */
+
+static void __init squash_mem_tags(struct tag *tag)
+{
+	for (; tag->hdr.size; tag = tag_next(tag))
+		if (tag->hdr.tag == ATAG_MEM)
+			tag->hdr.tag = ATAG_NONE;
+}
 
 void __init setup_arch(char **cmdline_p)
 {
@@ -667,10 +802,13 @@ void __init setup_arch(char **cmdline_p)
 	struct machine_desc *mdesc;
 	char *from = default_command_line;
 
+	init_tags.mem.start = PHYS_OFFSET;
+
 	unwind_init();
 
 	setup_processor();
 	mdesc = setup_machine(machine_arch_type);
+	machine_desc = mdesc;
 	machine_name = mdesc->name;
 
 	if (mdesc->soft_reboot)
@@ -678,15 +816,34 @@ void __init setup_arch(char **cmdline_p)
 
 	if (__atags_pointer)
 		tags = phys_to_virt(__atags_pointer);
-	else if (mdesc->boot_params)
-		tags = phys_to_virt(mdesc->boot_params);
+	else if (mdesc->boot_params) {
+#ifdef CONFIG_MMU
+		/*
+		 * We still are executing with a minimal MMU mapping created
+		 * with the presumption that the machine default for this
+		 * is located in the first MB of RAM.  Anything else will
+		 * fault and silently hang the kernel at this point.
+		 */
+		if (mdesc->boot_params < PHYS_OFFSET ||
+		    mdesc->boot_params >= PHYS_OFFSET + SZ_1M) {
+			printk(KERN_WARNING
+			       "Default boot params at physical 0x%08lx out of reach\n",
+			       mdesc->boot_params);
+		} else
+#endif
+		{
+			tags = phys_to_virt(mdesc->boot_params);
+		}
+	}
 
+#if defined(CONFIG_DEPRECATED_PARAM_STRUCT)
 	/*
 	 * If we have the old style parameters, convert them to
 	 * a tag list.
 	 */
 	if (tags->hdr.tag != ATAG_CORE)
 		convert_to_tag_list(tags);
+#endif
 	if (tags->hdr.tag != ATAG_CORE)
 		tags = (struct tag *)&init_tags;
 
@@ -714,22 +871,23 @@ void __init setup_arch(char **cmdline_p)
 
 	parse_early_param();
 
+	arm_memblock_init(&meminfo, mdesc);
+
 	paging_init(mdesc);
-	request_standard_resources(&meminfo, mdesc);
+	request_standard_resources(mdesc);
 
 #ifdef CONFIG_SMP
-	smp_init_cpus();
+	if (is_smp())
+		smp_init_cpus();
 #endif
+	reserve_crashkernel();
 
 	cpu_init();
 	tcm_init();
 
-	/*
-	 * Set up various architecture-specific pointers
-	 */
-	init_arch_irq = mdesc->init_irq;
-	system_timer = mdesc->timer;
-	init_machine = mdesc->init_machine;
+#ifdef CONFIG_MULTI_IRQ_HANDLER
+	handle_arch_irq = mdesc->handle_irq;
+#endif
 
 #ifdef CONFIG_VT
 #if defined(CONFIG_VGA_CONSOLE)
@@ -739,6 +897,9 @@ void __init setup_arch(char **cmdline_p)
 #endif
 #endif
 	early_trap_init();
+
+	if (mdesc->init_early)
+		mdesc->init_early();
 }
 
 

@@ -48,11 +48,6 @@ const char *get_system_type(void)
 	return "Alchemy Pb1550";
 }
 
-void board_reset(void)
-{
-	bcsr_write(BCSR_SYSTEM, 0);
-}
-
 void __init board_setup(void)
 {
 	u32 pin_func;
@@ -78,9 +73,9 @@ void __init board_setup(void)
 
 static int __init pb1550_init_irq(void)
 {
-	set_irq_type(AU1550_GPIO0_INT, IRQF_TRIGGER_LOW);
-	set_irq_type(AU1550_GPIO1_INT, IRQF_TRIGGER_LOW);
-	set_irq_type(AU1550_GPIO201_205_INT, IRQF_TRIGGER_HIGH);
+	irq_set_irq_type(AU1550_GPIO0_INT, IRQF_TRIGGER_LOW);
+	irq_set_irq_type(AU1550_GPIO1_INT, IRQF_TRIGGER_LOW);
+	irq_set_irq_type(AU1550_GPIO201_205_INT, IRQF_TRIGGER_HIGH);
 
 	/* enable both PCMCIA card irqs in the shared line */
 	alchemy_gpio2_enable_int(201);

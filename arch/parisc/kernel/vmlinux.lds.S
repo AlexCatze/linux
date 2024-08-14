@@ -94,8 +94,8 @@ SECTIONS
 
 	/* PA-RISC locks requires 16-byte alignment */
 	. = ALIGN(16);
-	.data.lock_aligned : {
-		*(.data.lock_aligned)
+	.data..lock_aligned : {
+		*(.data..lock_aligned)
 	}
 
 	/* End of data section */
@@ -105,10 +105,10 @@ SECTIONS
 	__bss_start = .;
 	/* page table entries need to be PAGE_SIZE aligned */
 	. = ALIGN(PAGE_SIZE);
-	.data.vmpages : {
-		*(.data.vm0.pmd)
-		*(.data.vm0.pgd)
-		*(.data.vm0.pte)
+	.data..vmpages : {
+		*(.data..vm0.pmd)
+		*(.data..vm0.pgd)
+		*(.data..vm0.pte)
 	}
 	.bss : {
 		*(.bss)
@@ -145,7 +145,7 @@ SECTIONS
 		EXIT_DATA
 	}
 
-	PERCPU(PAGE_SIZE)
+	PERCPU(L1_CACHE_BYTES, PAGE_SIZE)
 	. = ALIGN(PAGE_SIZE);
 	__init_end = .;
 	/* freed after init ends here */

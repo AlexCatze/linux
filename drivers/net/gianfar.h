@@ -262,6 +262,7 @@ extern const char gfar_driver_version[];
 
 #define next_bd(bdp, base, ring_size) skip_bd(bdp, 1, base, ring_size)
 
+#define RCTRL_TS_ENABLE 	0x01000000
 #define RCTRL_PAL_MASK		0x001f0000
 #define RCTRL_VLEX		0x00002000
 #define RCTRL_FILREN		0x00001000
@@ -539,7 +540,7 @@ struct txbd8
 
 struct txfcb {
 	u8	flags;
-	u8	reserved;
+	u8	ptp;    /* Flag to enable tx timestamping */
 	u8	l4os;	/* Level 4 Header Offset */
 	u8	l3os; 	/* Level 3 Header Offset */
 	u16	phcs;	/* Pseudo-header Checksum */
@@ -885,6 +886,7 @@ struct gfar {
 #define FSL_GIANFAR_DEV_HAS_MAGIC_PACKET	0x00000100
 #define FSL_GIANFAR_DEV_HAS_BD_STASHING		0x00000200
 #define FSL_GIANFAR_DEV_HAS_BUF_STASHING	0x00000400
+#define FSL_GIANFAR_DEV_HAS_TIMER		0x00000800
 
 #if (MAXGROUPS == 2)
 #define DEFAULT_MAPPING 	0xAA
@@ -905,12 +907,21 @@ enum {
 	MQ_MG_MODE
 };
 
+/*
+ * Per TX queue stats
+ */
+struct tx_q_stats {
+	unsigned long tx_packets;
+	unsigned long tx_bytes;
+};
+
 /**
  *	struct gfar_priv_tx_q - per tx queue structure
  *	@txlock: per queue tx spin lock
  *	@tx_skbuff:skb pointers
  *	@skb_curtx: to be used skb pointer
  *	@skb_dirtytx:the last used skb pointer
+ *	@stats: bytes/packets stats
  *	@qindex: index of this queue
  *	@dev: back pointer to the dev structure
  *	@grp: back pointer to the group to which this queue belongs
@@ -932,6 +943,7 @@ struct gfar_priv_tx_q {
 	struct	txbd8 *tx_bd_base;
 	struct	txbd8 *cur_tx;
 	struct	txbd8 *dirty_tx;
+	struct tx_q_stats stats;
 	struct	net_device *dev;
 	struct gfar_priv_grp *grp;
 	u16	skb_curtx;
@@ -1023,8 +1035,15 @@ struct gfar_priv_grp {
 	char int_name_er[GFAR_INT_NAME_MAX];
 };
 
+enum gfar_errata {
+	GFAR_ERRATA_74		= 0x01,
+	GFAR_ERRATA_76		= 0x02,
+	GFAR_ERRATA_A002	= 0x04,
+	GFAR_ERRATA_12		= 0x08, /* a.k.a errata eTSEC49 */
+};
+
 /* Struct stolen almost completely (and shamelessly) from the FCC enet source
- * (Ok, that's not so true anymore, but there is a family resemblence)
+ * (Ok, that's not so true anymore, but there is a family resemblance)
  * The GFAR buffer descriptors track the ring buffers.  The rx_bd_base
  * and tx_bd_base always point to the currently available buffer.
  * The dirty_tx tracks the current buffer that is being sent by the
@@ -1046,7 +1065,8 @@ struct gfar_private {
 
 	struct device_node *node;
 	struct net_device *ndev;
-	struct of_device *ofdev;
+	struct platform_device *ofdev;
+	enum gfar_errata errata;
 
 	struct gfar_priv_grp gfargrp[MAXGROUPS];
 	struct gfar_priv_tx_q *tx_queue[MAX_TX_QS];
@@ -1100,10 +1120,20 @@ struct gfar_private {
 
 	/* Network Statistics */
 	struct gfar_extra_stats extra_stats;
+
+	/* HW time stamping enabled flag */
+	int hwts_rx_en;
+	int hwts_tx_en;
 };
 
 extern unsigned int ftp_rqfpr[MAX_FILER_IDX + 1];
 extern unsigned int ftp_rqfcr[MAX_FILER_IDX + 1];
+
+static inline int gfar_has_errata(struct gfar_private *priv,
+				  enum gfar_errata err)
+{
+	return priv->errata & err;
+}
 
 static inline u32 gfar_read(volatile unsigned __iomem *addr)
 {

@@ -1,7 +1,7 @@
 /****************************************************************************
  * Driver for Solarflare Solarstorm network controllers and boards
  * Copyright 2005-2006 Fen Systems Ltd.
- * Copyright 2006-2008 Solarflare Communications Inc.
+ * Copyright 2006-2010 Solarflare Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
@@ -18,8 +18,8 @@
  */
 
 struct efx_loopback_self_tests {
-	int tx_sent[EFX_TX_QUEUE_COUNT];
-	int tx_done[EFX_TX_QUEUE_COUNT];
+	int tx_sent[EFX_TXQ_TYPES];
+	int tx_done[EFX_TXQ_TYPES];
 	int rx_good;
 	int rx_bad;
 };

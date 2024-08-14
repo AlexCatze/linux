@@ -361,8 +361,8 @@ static int dma;
 struct net_device * __init ni65_probe(int unit)
 {
 	struct net_device *dev = alloc_etherdev(0);
-	static int ports[] = {0x360,0x300,0x320,0x340, 0};
-	int *port;
+	static const int ports[] = { 0x360, 0x300, 0x320, 0x340, 0 };
+	const int *port;
 	int err = 0;
 
 	if (!dev)
@@ -784,7 +784,7 @@ static void ni65_stop_start(struct net_device *dev,struct priv *p)
 		if(!p->lock)
 			if (p->tmdnum || !p->xmit_queued)
 				netif_wake_queue(dev);
-		dev->trans_start = jiffies;
+		dev->trans_start = jiffies; /* prevent tx timeout */
 	}
 	else
 		writedatareg(CSR0_STRT | csr0);
@@ -1150,7 +1150,7 @@ static void ni65_timeout(struct net_device *dev)
 		printk("%02x ",p->tmdhead[i].u.s.status);
 	printk("\n");
 	ni65_lance_reinit(dev);
-	dev->trans_start = jiffies;
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	netif_wake_queue(dev);
 }
 
@@ -1213,7 +1213,6 @@ static netdev_tx_t ni65_send_packet(struct sk_buff *skb,
 			netif_wake_queue(dev);
 
 		p->lock = 0;
-		dev->trans_start = jiffies;
 
 		spin_unlock_irqrestore(&p->ring_lock, flags);
 	}

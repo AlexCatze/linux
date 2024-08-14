@@ -926,7 +926,7 @@ static int snd_emu10k1_emu1010_init(struct snd_emu10k1 *emu)
 	snd_emu1010_fpga_write(emu, EMU_HANA_MIDI_IN, 0x19);
 	/* Unknown. */
 	snd_emu1010_fpga_write(emu, EMU_HANA_MIDI_OUT, 0x0c);
-	/* IRQ Enable: Alll on */
+	/* IRQ Enable: All on */
 	/* snd_emu1010_fpga_write(emu, 0x09, 0x0f ); */
 	/* IRQ Enable: All off */
 	snd_emu1010_fpga_write(emu, EMU_HANA_IRQ_ENABLE, 0x00);
@@ -1787,7 +1787,7 @@ int __devinit snd_emu10k1_create(struct snd_card *card,
 	else if (subsystem)
 		snd_printdd("Sound card name = %s, "
 			"vendor = 0x%x, device = 0x%x, subsystem = 0x%x. "
-			"Forced to subsytem = 0x%x\n",	c->name,
+			"Forced to subsystem = 0x%x\n",	c->name,
 			pci->vendor, pci->device, emu->serial, c->subsystem);
 	else
 		snd_printdd("Sound card name = %s, "

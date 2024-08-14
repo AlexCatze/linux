@@ -159,11 +159,9 @@ static inline char mon_text_get_data(struct mon_event_text *ep, struct urb *urb,
 		if (src == NULL)
 			return 'Z';	/* '0' would be not as pretty. */
 	} else {
-		struct scatterlist *sg = urb->sg->sg;
+		struct scatterlist *sg = urb->sg;
 
-		/* If IOMMU coalescing occurred, we cannot trust sg_page */
-		if (urb->sg->nents != urb->num_sgs ||
-				PageHighMem(sg_page(sg)))
+		if (PageHighMem(sg_page(sg)))
 			return 'D';
 
 		/* For the text interface we copy only the first sg buffer */
@@ -238,6 +236,9 @@ static void mon_text_event(struct mon_reader_text *rp, struct urb *urb,
 			fp++;
 			dp++;
 		}
+		/* Wasteful, but simple to understand: ISO 'C' is sparse. */
+		if (ev_type == 'C')
+			ep->length = urb->transfer_buffer_length;
 	}
 
 	ep->setup_flag = mon_text_get_setup(ep, urb, ev_type, rp->r.m_bus);

@@ -284,7 +284,7 @@ static void atl1e_set_multi(struct net_device *netdev)
 {
 	struct atl1e_adapter *adapter = netdev_priv(netdev);
 	struct atl1e_hw *hw = &adapter->hw;
-	struct dev_mc_list *mc_ptr;
+	struct netdev_hw_addr *ha;
 	u32 mac_ctrl_data = 0;
 	u32 hash_value;
 
@@ -307,8 +307,8 @@ static void atl1e_set_multi(struct net_device *netdev)
 	AT_WRITE_REG_ARRAY(hw, REG_RX_HASH_TABLE, 1, 0);
 
 	/* comoute mc addresses' hash value ,and put it into hash table */
-	netdev_for_each_mc_addr(mc_ptr, netdev) {
-		hash_value = atl1e_hash_mc_addr(hw, mc_ptr->dmi_addr);
+	netdev_for_each_mc_addr(ha, netdev) {
+		hash_value = atl1e_hash_mc_addr(hw, ha->addr);
 		atl1e_hash_set(hw, hash_value);
 	}
 }
@@ -547,8 +547,8 @@ static int __devinit atl1e_sw_init(struct atl1e_adapter *adapter)
 	hw->device_id = pdev->device;
 	hw->subsystem_vendor_id = pdev->subsystem_vendor;
 	hw->subsystem_id = pdev->subsystem_device;
+	hw->revision_id  = pdev->revision;
 
-	pci_read_config_byte(pdev, PCI_REVISION_ID, &hw->revision_id);
 	pci_read_config_word(pdev, PCI_COMMAND, &hw->pci_cmd_word);
 
 	phy_status_data = AT_READ_REG(hw, REG_PHY_STATUS);
@@ -707,8 +707,6 @@ static void atl1e_init_ring_resources(struct atl1e_adapter *adapter)
 	adapter->ring_vir_addr = NULL;
 	adapter->rx_ring.desc = NULL;
 	rwlock_init(&adapter->tx_ring.tx_lock);
-
-	return;
 }
 
 /*
@@ -905,8 +903,6 @@ static inline void atl1e_configure_des_ring(const struct atl1e_adapter *adapter)
 	AT_WRITE_REG(hw, REG_HOST_RXFPAGE_SIZE, rx_ring->page_size);
 	/* Load all of base address above */
 	AT_WRITE_REG(hw, REG_LOAD_PTR, 1);
-
-	return;
 }
 
 static inline void atl1e_configure_tx(struct atl1e_adapter *adapter)
@@ -936,11 +932,11 @@ static inline void atl1e_configure_tx(struct atl1e_adapter *adapter)
 	max_pay_load  = ((dev_ctrl_data >> DEVICE_CTRL_MAX_PAYLOAD_SHIFT)) &
 			DEVICE_CTRL_MAX_PAYLOAD_MASK;
 
-	hw->dmaw_block = min(max_pay_load, hw->dmaw_block);
+	hw->dmaw_block = min_t(u32, max_pay_load, hw->dmaw_block);
 
 	max_pay_load  = ((dev_ctrl_data >> DEVICE_CTRL_MAX_RREQ_SZ_SHIFT)) &
 			DEVICE_CTRL_MAX_RREQ_SZ_MASK;
-	hw->dmar_block = min(max_pay_load, hw->dmar_block);
+	hw->dmar_block = min_t(u32, max_pay_load, hw->dmar_block);
 
 	if (hw->nic_type != athr_l2e_revB)
 		AT_WRITE_REGW(hw, REG_TXQ_CTRL + 2,
@@ -950,7 +946,6 @@ static inline void atl1e_configure_tx(struct atl1e_adapter *adapter)
 			(((u16)hw->tpd_burst & TXQ_CTRL_NUM_TPD_BURST_MASK)
 			 << TXQ_CTRL_NUM_TPD_BURST_SHIFT)
 			| TXQ_CTRL_ENH_MODE | TXQ_CTRL_EN);
-	return;
 }
 
 static inline void atl1e_configure_rx(struct atl1e_adapter *adapter)
@@ -1004,7 +999,6 @@ static inline void atl1e_configure_rx(struct atl1e_adapter *adapter)
 			 RXQ_CTRL_CUT_THRU_EN | RXQ_CTRL_EN;
 
 	AT_WRITE_REG(hw, REG_RXQ_CTRL, rxq_ctrl_data);
-	return;
 }
 
 static inline void atl1e_configure_dma(struct atl1e_adapter *adapter)
@@ -1024,7 +1018,6 @@ static inline void atl1e_configure_dma(struct atl1e_adapter *adapter)
 		<< DMA_CTRL_DMAW_DLY_CNT_SHIFT;
 
 	AT_WRITE_REG(hw, REG_DMA_CTRL, dma_ctrl_data);
-	return;
 }
 
 static void atl1e_setup_mac_ctrl(struct atl1e_adapter *adapter)
@@ -1338,7 +1331,7 @@ static inline void atl1e_rx_checksum(struct atl1e_adapter *adapter,
 	u16 pkt_flags;
 	u16 err_flags;
 
-	skb->ip_summed = CHECKSUM_NONE;
+	skb_checksum_none_assert(skb);
 	pkt_flags = prrs->pkt_flag;
 	err_flags = prrs->err_flag;
 	if (((pkt_flags & RRS_IS_IPV4) || (pkt_flags & RRS_IS_IPV6)) &&
@@ -1428,7 +1421,6 @@ static void atl1e_clean_rx_irq(struct atl1e_adapter *adapter, u8 que,
 					    "Memory squeeze, deferring packet\n");
 				goto skip_pkt;
 			}
-			skb->dev = netdev;
 			memcpy(skb->data, (u8 *)(prrs + 1), packet_size);
 			skb_put(skb, packet_size);
 			skb->protocol = eth_type_trans(skb, netdev);
@@ -1657,7 +1649,7 @@ check_sum:
 	if (likely(skb->ip_summed == CHECKSUM_PARTIAL)) {
 		u8 css, cso;
 
-		cso = skb_transport_offset(skb);
+		cso = skb_checksum_start_offset(skb);
 		if (unlikely(cso & 0x1)) {
 			netdev_err(adapter->netdev,
 				   "payload offset should not ant event number\n");
@@ -1680,7 +1672,7 @@ static void atl1e_tx_map(struct atl1e_adapter *adapter,
 {
 	struct atl1e_tpd_desc *use_tpd = NULL;
 	struct atl1e_tx_buffer *tx_buffer = NULL;
-	u16 buf_len = skb->len - skb->data_len;
+	u16 buf_len = skb_headlen(skb);
 	u16 map_len = 0;
 	u16 mapped_len = 0;
 	u16 hdr_len = 0;
@@ -1822,7 +1814,7 @@ static netdev_tx_t atl1e_xmit_frame(struct sk_buff *skb,
 
 	tpd = atl1e_get_tpd(adapter);
 
-	if (unlikely(adapter->vlgrp && vlan_tx_tag_present(skb))) {
+	if (unlikely(vlan_tx_tag_present(skb))) {
 		u16 vlan_tag = vlan_tx_tag_get(skb);
 		u16 atl1e_vlan_tag;
 
@@ -2059,9 +2051,9 @@ static int atl1e_suspend(struct pci_dev *pdev, pm_message_t state)
 		atl1e_read_phy_reg(hw, MII_BMSR, (u16 *)&mii_bmsr_data);
 		atl1e_read_phy_reg(hw, MII_BMSR, (u16 *)&mii_bmsr_data);
 
-		mii_advertise_data = MII_AR_10T_HD_CAPS;
+		mii_advertise_data = ADVERTISE_10HALF;
 
-		if ((atl1e_write_phy_reg(hw, MII_AT001_CR, 0) != 0) ||
+		if ((atl1e_write_phy_reg(hw, MII_CTRL1000, 0) != 0) ||
 		    (atl1e_write_phy_reg(hw,
 			   MII_ADVERTISE, mii_advertise_data) != 0) ||
 		    (atl1e_phy_commit(hw)) != 0) {
@@ -2324,7 +2316,7 @@ static int __devinit atl1e_probe(struct pci_dev *pdev,
 	netif_napi_add(netdev, &adapter->napi, atl1e_clean, 64);
 
 	init_timer(&adapter->phy_config_timer);
-	adapter->phy_config_timer.function = &atl1e_phy_config;
+	adapter->phy_config_timer.function = atl1e_phy_config;
 	adapter->phy_config_timer.data = (unsigned long) adapter;
 
 	/* get user settings */
@@ -2517,7 +2509,7 @@ static struct pci_driver atl1e_driver = {
 	.id_table = atl1e_pci_tbl,
 	.probe    = atl1e_probe,
 	.remove   = __devexit_p(atl1e_remove),
-	/* Power Managment Hooks */
+	/* Power Management Hooks */
 #ifdef CONFIG_PM
 	.suspend  = atl1e_suspend,
 	.resume   = atl1e_resume,

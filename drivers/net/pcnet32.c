@@ -376,7 +376,7 @@ static void pcnet32_wio_reset(unsigned long addr)
 static int pcnet32_wio_check(unsigned long addr)
 {
 	outw(88, addr + PCNET32_WIO_RAP);
-	return (inw(addr + PCNET32_WIO_RAP) == 88);
+	return inw(addr + PCNET32_WIO_RAP) == 88;
 }
 
 static struct pcnet32_access pcnet32_wio = {
@@ -431,7 +431,7 @@ static void pcnet32_dwio_reset(unsigned long addr)
 static int pcnet32_dwio_check(unsigned long addr)
 {
 	outl(88, addr + PCNET32_DWIO_RAP);
-	return ((inl(addr + PCNET32_DWIO_RAP) & 0xffff) == 88);
+	return (inl(addr + PCNET32_DWIO_RAP) & 0xffff) == 88;
 }
 
 static struct pcnet32_access pcnet32_dwio = {
@@ -448,7 +448,7 @@ static void pcnet32_netif_stop(struct net_device *dev)
 {
 	struct pcnet32_private *lp = netdev_priv(dev);
 
-	dev->trans_start = jiffies;
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	napi_disable(&lp->napi);
 	netif_tx_disable(dev);
 }
@@ -647,7 +647,6 @@ free_new_rx_ring:
 			    (1 << size),
 			    new_rx_ring,
 			    new_ring_dma_addr);
-	return;
 }
 
 static void pcnet32_purge_rx_ring(struct net_device *dev)
@@ -1215,7 +1214,6 @@ static void pcnet32_rx_entry(struct net_device *dev,
 	skb->protocol = eth_type_trans(skb, dev);
 	netif_receive_skb(skb);
 	dev->stats.rx_packets++;
-	return;
 }
 
 static int pcnet32_rx(struct net_device *dev, int budget)
@@ -1653,7 +1651,7 @@ pcnet32_probe1(unsigned long ioaddr, int shared, struct pci_dev *pdev)
 	/*
 	 *  On selected chips turn on the BCR18:NOUFLO bit. This stops transmit
 	 *  starting until the packet is loaded. Strike one for reliability, lose
-	 *  one for latency - although on PCI this isnt a big loss. Older chips
+	 *  one for latency - although on PCI this isn't a big loss. Older chips
 	 *  have FIFO's smaller than a packet, so you can't do this.
 	 *  Turn on BCR18:BurstRdEn and BCR18:BurstWrEn.
 	 */
@@ -2398,7 +2396,7 @@ static void pcnet32_tx_timeout(struct net_device *dev)
 	}
 	pcnet32_restart(dev, CSR0_NORMAL);
 
-	dev->trans_start = jiffies;
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	netif_wake_queue(dev);
 
 	spin_unlock_irqrestore(&lp->lock, flags);
@@ -2448,8 +2446,6 @@ static netdev_tx_t pcnet32_start_xmit(struct sk_buff *skb,
 
 	/* Trigger an immediate send poll. */
 	lp->a.write_csr(ioaddr, CSR0, CSR0_INTEN | CSR0_TXPOLL);
-
-	dev->trans_start = jiffies;
 
 	if (lp->tx_ring[(entry + 1) & lp->tx_mod_mask].base != 0) {
 		lp->tx_full = 1;
@@ -2590,7 +2586,7 @@ static void pcnet32_load_multicast(struct net_device *dev)
 	struct pcnet32_private *lp = netdev_priv(dev);
 	volatile struct pcnet32_init_block *ib = lp->init_block;
 	volatile __le16 *mcast_table = (__le16 *)ib->filter;
-	struct dev_mc_list *dmi;
+	struct netdev_hw_addr *ha;
 	unsigned long ioaddr = dev->base_addr;
 	char *addrs;
 	int i;
@@ -2611,8 +2607,8 @@ static void pcnet32_load_multicast(struct net_device *dev)
 	ib->filter[1] = 0;
 
 	/* Add addresses */
-	netdev_for_each_mc_addr(dmi, dev) {
-		addrs = dmi->dmi_addr;
+	netdev_for_each_mc_addr(ha, dev) {
+		addrs = ha->addr;
 
 		/* multicast address? */
 		if (!(*addrs & 1))
@@ -2625,7 +2621,6 @@ static void pcnet32_load_multicast(struct net_device *dev)
 	for (i = 0; i < 4; i++)
 		lp->a.write_csr(ioaddr, PCNET32_MC_FILTER + i,
 				le16_to_cpu(mcast_table[i]));
-	return;
 }
 
 /*

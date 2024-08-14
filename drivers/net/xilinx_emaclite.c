@@ -20,10 +20,11 @@
 #include <linux/skbuff.h>
 #include <linux/io.h>
 #include <linux/slab.h>
-
+#include <linux/of_address.h>
 #include <linux/of_device.h>
 #include <linux/of_platform.h>
 #include <linux/of_mdio.h>
+#include <linux/of_net.h>
 #include <linux/phy.h>
 
 #define DRIVER_NAME "xilinx_emaclite"
@@ -430,8 +431,8 @@ static u16 xemaclite_recv_data(struct net_local *drvdata, u8 *data)
 	}
 
 	/* Get the protocol type of the ethernet frame that arrived */
-	proto_type = ((in_be32(addr + XEL_HEADER_OFFSET +
-			XEL_RXBUFF_OFFSET) >> XEL_HEADER_SHIFT) &
+	proto_type = ((ntohl(in_be32(addr + XEL_HEADER_OFFSET +
+			XEL_RXBUFF_OFFSET)) >> XEL_HEADER_SHIFT) &
 			XEL_RPLR_LENGTH_MASK);
 
 	/* Check if received ethernet frame is a raw ethernet frame
@@ -439,9 +440,9 @@ static u16 xemaclite_recv_data(struct net_local *drvdata, u8 *data)
 	if (proto_type > (ETH_FRAME_LEN + ETH_FCS_LEN)) {
 
 		if (proto_type == ETH_P_IP) {
-			length = ((in_be32(addr +
+			length = ((ntohl(in_be32(addr +
 					XEL_HEADER_IP_LENGTH_OFFSET +
-					XEL_RXBUFF_OFFSET) >>
+					XEL_RXBUFF_OFFSET)) >>
 					XEL_HEADER_SHIFT) &
 					XEL_RPLR_LENGTH_MASK);
 			length += ETH_HLEN + ETH_FCS_LEN;
@@ -515,7 +516,7 @@ static void xemaclite_update_address(struct net_local *drvdata,
  */
 static int xemaclite_set_mac_address(struct net_device *dev, void *address)
 {
-	struct net_local *lp = (struct net_local *) netdev_priv(dev);
+	struct net_local *lp = netdev_priv(dev);
 	struct sockaddr *addr = address;
 
 	if (netif_running(dev))
@@ -534,7 +535,7 @@ static int xemaclite_set_mac_address(struct net_device *dev, void *address)
  */
 static void xemaclite_tx_timeout(struct net_device *dev)
 {
-	struct net_local *lp = (struct net_local *) netdev_priv(dev);
+	struct net_local *lp = netdev_priv(dev);
 	unsigned long flags;
 
 	dev_err(&lp->ndev->dev, "Exceeded transmit timeout of %lu ms\n",
@@ -558,7 +559,7 @@ static void xemaclite_tx_timeout(struct net_device *dev)
 	}
 
 	/* To exclude tx timeout */
-	dev->trans_start = 0xffffffff - TX_TIMEOUT - TX_TIMEOUT;
+	dev->trans_start = jiffies; /* prevent tx timeout */
 
 	/* We're all ready to go. Start the queue */
 	netif_wake_queue(dev);
@@ -578,7 +579,7 @@ static void xemaclite_tx_timeout(struct net_device *dev)
  */
 static void xemaclite_tx_handler(struct net_device *dev)
 {
-	struct net_local *lp = (struct net_local *) netdev_priv(dev);
+	struct net_local *lp = netdev_priv(dev);
 
 	dev->stats.tx_packets++;
 	if (lp->deferred_skb) {
@@ -590,7 +591,7 @@ static void xemaclite_tx_handler(struct net_device *dev)
 			dev->stats.tx_bytes += lp->deferred_skb->len;
 			dev_kfree_skb_irq(lp->deferred_skb);
 			lp->deferred_skb = NULL;
-			dev->trans_start = jiffies;
+			dev->trans_start = jiffies; /* prevent tx timeout */
 			netif_wake_queue(dev);
 		}
 	}
@@ -605,7 +606,7 @@ static void xemaclite_tx_handler(struct net_device *dev)
  */
 static void xemaclite_rx_handler(struct net_device *dev)
 {
-	struct net_local *lp = (struct net_local *) netdev_priv(dev);
+	struct net_local *lp = netdev_priv(dev);
 	struct sk_buff *skb;
 	unsigned int align;
 	u32 len;
@@ -639,10 +640,9 @@ static void xemaclite_rx_handler(struct net_device *dev)
 	}
 
 	skb_put(skb, len);	/* Tell the skb how much data we got */
-	skb->dev = dev;		/* Fill out required meta-data */
 
 	skb->protocol = eth_type_trans(skb, dev);
-	skb->ip_summed = CHECKSUM_NONE;
+	skb_checksum_none_assert(skb);
 
 	dev->stats.rx_packets++;
 	dev->stats.rx_bytes += len;
@@ -662,7 +662,7 @@ static irqreturn_t xemaclite_interrupt(int irq, void *dev_id)
 {
 	bool tx_complete = 0;
 	struct net_device *dev = dev_id;
-	struct net_local *lp = (struct net_local *) netdev_priv(dev);
+	struct net_local *lp = netdev_priv(dev);
 	void __iomem *base_addr = lp->base_addr;
 	u32 tx_status;
 
@@ -786,7 +786,7 @@ static int xemaclite_mdio_read(struct mii_bus *bus, int phy_id, int reg)
  * @reg:	register number to write to
  * @val:	value to write to the register number specified by reg
  *
- * This fucntion waits till the device is ready to accept a new MDIO
+ * This function waits till the device is ready to accept a new MDIO
  * request and then writes the val to the MDIO Write Data register.
  */
 static int xemaclite_mdio_write(struct mii_bus *bus, int phy_id, int reg,
@@ -919,7 +919,7 @@ void xemaclite_adjust_link(struct net_device *ndev)
  */
 static int xemaclite_open(struct net_device *dev)
 {
-	struct net_local *lp = (struct net_local *) netdev_priv(dev);
+	struct net_local *lp = netdev_priv(dev);
 	int retval;
 
 	/* Just to be safe, stop the device first */
@@ -988,7 +988,7 @@ static int xemaclite_open(struct net_device *dev)
  */
 static int xemaclite_close(struct net_device *dev)
 {
-	struct net_local *lp = (struct net_local *) netdev_priv(dev);
+	struct net_local *lp = netdev_priv(dev);
 
 	netif_stop_queue(dev);
 	xemaclite_disable_interrupts(lp);
@@ -999,21 +999,6 @@ static int xemaclite_close(struct net_device *dev)
 	lp->phy_dev = NULL;
 
 	return 0;
-}
-
-/**
- * xemaclite_get_stats - Get the stats for the net_device
- * @dev:	Pointer to the network device
- *
- * This function returns the address of the 'net_device_stats' structure for the
- * given network device. This structure holds usage statistics for the network
- * device.
- *
- * Return:	Pointer to the net_device_stats structure.
- */
-static struct net_device_stats *xemaclite_get_stats(struct net_device *dev)
-{
-	return &dev->stats;
 }
 
 /**
@@ -1032,7 +1017,7 @@ static struct net_device_stats *xemaclite_get_stats(struct net_device *dev)
  */
 static int xemaclite_send(struct sk_buff *orig_skb, struct net_device *dev)
 {
-	struct net_local *lp = (struct net_local *) netdev_priv(dev);
+	struct net_local *lp = netdev_priv(dev);
 	struct sk_buff *new_skb;
 	unsigned int len;
 	unsigned long flags;
@@ -1055,7 +1040,6 @@ static int xemaclite_send(struct sk_buff *orig_skb, struct net_device *dev)
 
 	dev->stats.tx_bytes += len;
 	dev_kfree_skb(new_skb);
-	dev->trans_start = jiffies;
 
 	return 0;
 }
@@ -1070,7 +1054,7 @@ static int xemaclite_send(struct sk_buff *orig_skb, struct net_device *dev)
 static void xemaclite_remove_ndev(struct net_device *ndev)
 {
 	if (ndev) {
-		struct net_local *lp = (struct net_local *) netdev_priv(ndev);
+		struct net_local *lp = netdev_priv(ndev);
 
 		if (lp->base_addr)
 			iounmap((void __iomem __force *) (lp->base_addr));
@@ -1088,9 +1072,9 @@ static void xemaclite_remove_ndev(struct net_device *ndev)
  *
  * Return:	Value of the parameter if the parameter is found, or 0 otherwise
  */
-static bool get_bool(struct of_device *ofdev, const char *s)
+static bool get_bool(struct platform_device *ofdev, const char *s)
 {
-	u32 *p = (u32 *)of_get_property(ofdev->node, s, NULL);
+	u32 *p = (u32 *)of_get_property(ofdev->dev.of_node, s, NULL);
 
 	if (p) {
 		return (bool)*p;
@@ -1117,8 +1101,7 @@ static struct net_device_ops xemaclite_netdev_ops;
  * Return:	0, if the driver is bound to the Emaclite device, or
  *		a negative error if there is failure.
  */
-static int __devinit xemaclite_of_probe(struct of_device *ofdev,
-					const struct of_device_id *match)
+static int __devinit xemaclite_of_probe(struct platform_device *ofdev)
 {
 	struct resource r_irq; /* Interrupt resources */
 	struct resource r_mem; /* IO mem resources */
@@ -1132,14 +1115,14 @@ static int __devinit xemaclite_of_probe(struct of_device *ofdev,
 	dev_info(dev, "Device Tree Probing\n");
 
 	/* Get iospace for the device */
-	rc = of_address_to_resource(ofdev->node, 0, &r_mem);
+	rc = of_address_to_resource(ofdev->dev.of_node, 0, &r_mem);
 	if (rc) {
 		dev_err(dev, "invalid address\n");
 		return rc;
 	}
 
 	/* Get IRQ for the device */
-	rc = of_irq_to_resource(ofdev->node, 0, &r_irq);
+	rc = of_irq_to_resource(ofdev->dev.of_node, 0, &r_irq);
 	if (rc == NO_IRQ) {
 		dev_err(dev, "no IRQ found\n");
 		return rc;
@@ -1172,7 +1155,7 @@ static int __devinit xemaclite_of_probe(struct of_device *ofdev,
 	}
 
 	/* Get the virtual base address for the device */
-	lp->base_addr = ioremap(r_mem.start, r_mem.end - r_mem.start + 1);
+	lp->base_addr = ioremap(r_mem.start, resource_size(&r_mem));
 	if (NULL == lp->base_addr) {
 		dev_err(dev, "EmacLite: Could not allocate iomem\n");
 		rc = -EIO;
@@ -1184,7 +1167,7 @@ static int __devinit xemaclite_of_probe(struct of_device *ofdev,
 	lp->next_rx_buf_to_use = 0x0;
 	lp->tx_ping_pong = get_bool(ofdev, "xlnx,tx-ping-pong");
 	lp->rx_ping_pong = get_bool(ofdev, "xlnx,rx-ping-pong");
-	mac_address = of_get_mac_address(ofdev->node);
+	mac_address = of_get_mac_address(ofdev->dev.of_node);
 
 	if (mac_address)
 		/* Set the MAC address. */
@@ -1199,7 +1182,7 @@ static int __devinit xemaclite_of_probe(struct of_device *ofdev,
 	/* Set the MAC address in the EmacLite device */
 	xemaclite_update_address(lp, ndev->dev_addr);
 
-	lp->phy_node = of_parse_phandle(ofdev->node, "phy-handle", 0);
+	lp->phy_node = of_parse_phandle(ofdev->dev.of_node, "phy-handle", 0);
 	rc = xemaclite_mdio_setup(lp, &ofdev->dev);
 	if (rc)
 		dev_warn(&ofdev->dev, "error registering MDIO bus\n");
@@ -1225,7 +1208,7 @@ static int __devinit xemaclite_of_probe(struct of_device *ofdev,
 	return 0;
 
 error1:
-	release_mem_region(ndev->mem_start, r_mem.end - r_mem.start + 1);
+	release_mem_region(ndev->mem_start, resource_size(&r_mem));
 
 error2:
 	xemaclite_remove_ndev(ndev);
@@ -1242,12 +1225,12 @@ error2:
  *
  * Return:	0, always.
  */
-static int __devexit xemaclite_of_remove(struct of_device *of_dev)
+static int __devexit xemaclite_of_remove(struct platform_device *of_dev)
 {
 	struct device *dev = &of_dev->dev;
 	struct net_device *ndev = dev_get_drvdata(dev);
 
-	struct net_local *lp = (struct net_local *) netdev_priv(ndev);
+	struct net_local *lp = netdev_priv(ndev);
 
 	/* Un-register the mii_bus, if configured */
 	if (lp->has_mdio) {
@@ -1271,13 +1254,25 @@ static int __devexit xemaclite_of_remove(struct of_device *of_dev)
 	return 0;
 }
 
+#ifdef CONFIG_NET_POLL_CONTROLLER
+static void
+xemaclite_poll_controller(struct net_device *ndev)
+{
+	disable_irq(ndev->irq);
+	xemaclite_interrupt(ndev->irq, ndev);
+	enable_irq(ndev->irq);
+}
+#endif
+
 static struct net_device_ops xemaclite_netdev_ops = {
 	.ndo_open		= xemaclite_open,
 	.ndo_stop		= xemaclite_close,
 	.ndo_start_xmit		= xemaclite_send,
 	.ndo_set_mac_address	= xemaclite_set_mac_address,
 	.ndo_tx_timeout		= xemaclite_tx_timeout,
-	.ndo_get_stats		= xemaclite_get_stats,
+#ifdef CONFIG_NET_POLL_CONTROLLER
+	.ndo_poll_controller = xemaclite_poll_controller,
+#endif
 };
 
 /* Match table for OF platform binding */
@@ -1292,9 +1287,12 @@ static struct of_device_id xemaclite_of_match[] __devinitdata = {
 };
 MODULE_DEVICE_TABLE(of, xemaclite_of_match);
 
-static struct of_platform_driver xemaclite_of_driver = {
-	.name		= DRIVER_NAME,
-	.match_table	= xemaclite_of_match,
+static struct platform_driver xemaclite_of_driver = {
+	.driver = {
+		.name = DRIVER_NAME,
+		.owner = THIS_MODULE,
+		.of_match_table = xemaclite_of_match,
+	},
 	.probe		= xemaclite_of_probe,
 	.remove		= __devexit_p(xemaclite_of_remove),
 };
@@ -1307,7 +1305,7 @@ static struct of_platform_driver xemaclite_of_driver = {
 static int __init xemaclite_init(void)
 {
 	/* No kernel boot options used, we just need to register the driver */
-	return of_register_platform_driver(&xemaclite_of_driver);
+	return platform_driver_register(&xemaclite_of_driver);
 }
 
 /**
@@ -1315,7 +1313,7 @@ static int __init xemaclite_init(void)
  */
 static void __exit xemaclite_cleanup(void)
 {
-	of_unregister_platform_driver(&xemaclite_of_driver);
+	platform_driver_unregister(&xemaclite_of_driver);
 }
 
 module_init(xemaclite_init);

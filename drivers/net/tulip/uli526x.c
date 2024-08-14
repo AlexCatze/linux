@@ -480,7 +480,7 @@ static int uli526x_open(struct net_device *dev)
 	init_timer(&db->timer);
 	db->timer.expires = ULI526X_TIMER_WUT + HZ * 2;
 	db->timer.data = (unsigned long)dev;
-	db->timer.function = &uli526x_timer;
+	db->timer.function = uli526x_timer;
 	add_timer(&db->timer);
 
 	return 0;
@@ -1040,11 +1040,11 @@ static void uli526x_timer(unsigned long data)
 
 	/* TX polling kick monitor */
 	if ( db->tx_packet_cnt &&
-	     time_after(jiffies, dev->trans_start + ULI526X_TX_KICK) ) {
+	     time_after(jiffies, dev_trans_start(dev) + ULI526X_TX_KICK) ) {
 		outl(0x1, dev->base_addr + DCR1);   // Tx polling again
 
 		// TX Timeout
-		if ( time_after(jiffies, dev->trans_start + ULI526X_TX_TIMEOUT) ) {
+		if ( time_after(jiffies, dev_trans_start(dev) + ULI526X_TX_TIMEOUT) ) {
 			db->reset_TXtimeout++;
 			db->wait_reset = 1;
 			printk( "%s: Tx timeout - resetting\n",
@@ -1393,7 +1393,7 @@ static void update_cr6(u32 cr6_data, unsigned long ioaddr)
 static void send_filter_frame(struct net_device *dev, int mc_cnt)
 {
 	struct uli526x_board_info *db = netdev_priv(dev);
-	struct dev_mc_list *mcptr;
+	struct netdev_hw_addr *ha;
 	struct tx_desc *txptr;
 	u16 * addrptr;
 	u32 * suptr;
@@ -1416,8 +1416,8 @@ static void send_filter_frame(struct net_device *dev, int mc_cnt)
 	*suptr++ = 0xffff << FLT_SHIFT;
 
 	/* fit the multicast address */
-	netdev_for_each_mc_addr(mcptr, dev) {
-		addrptr = (u16 *) mcptr->dmi_addr;
+	netdev_for_each_mc_addr(ha, dev) {
+		addrptr = (u16 *) ha->addr;
 		*suptr++ = addrptr[0] << FLT_SHIFT;
 		*suptr++ = addrptr[1] << FLT_SHIFT;
 		*suptr++ = addrptr[2] << FLT_SHIFT;
@@ -1747,7 +1747,7 @@ static u16 phy_readby_cr10(unsigned long iobase, u8 phy_addr, u8 offset)
 		if(cr10_value&0x10000000)
 			break;
 	}
-	return (cr10_value&0x0ffff);
+	return cr10_value & 0x0ffff;
 }
 
 static void phy_writeby_cr10(unsigned long iobase, u8 phy_addr, u8 offset, u16 phy_data)

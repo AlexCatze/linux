@@ -50,6 +50,7 @@
 
 #define ATH9K_5GHZ_ALL		ATH9K_5GHZ_5150_5350, \
 				ATH9K_5GHZ_5470_5850
+
 /* This one skips what we call "mid band" */
 #define ATH9K_5GHZ_NO_MIDBAND	ATH9K_5GHZ_5150_5350, \
 				ATH9K_5GHZ_5725_5850
@@ -157,6 +158,13 @@ ieee80211_regdomain *ath_world_regdomain(struct ath_regulatory *reg)
 	}
 }
 
+bool ath_is_49ghz_allowed(u16 regdomain)
+{
+	/* possibly more */
+	return regdomain == MKK9_MKKC;
+}
+EXPORT_SYMBOL(ath_is_49ghz_allowed);
+
 /* Frequency is one where radar detection is required */
 static bool ath_is_radar_freq(u16 center_freq)
 {
@@ -260,7 +268,7 @@ ath_reg_apply_active_scan_flags(struct wiphy *wiphy,
 	}
 
 	/*
-	 * If a country IE has been recieved check its rule for this
+	 * If a country IE has been received check its rule for this
 	 * channel first before enabling active scan. The passive scan
 	 * would have been enforced by the initial processing of our
 	 * custom regulatory domain.
@@ -332,7 +340,6 @@ static void ath_reg_apply_world_flags(struct wiphy *wiphy,
 		ath_reg_apply_active_scan_flags(wiphy, initiator);
 		break;
 	}
-	return;
 }
 
 int ath_reg_notifier_apply(struct wiphy *wiphy,
@@ -341,6 +348,14 @@ int ath_reg_notifier_apply(struct wiphy *wiphy,
 {
 	/* We always apply this */
 	ath_reg_apply_radar_flags(wiphy);
+
+	/*
+	 * This would happen when we have sent a custom regulatory request
+	 * a world regulatory domain and the scheduler hasn't yet processed
+	 * any pending requests in the queue.
+	 */
+	if (!request)
+		return 0;
 
 	switch (request->initiator) {
 	case NL80211_REGDOM_SET_BY_DRIVER:
@@ -360,7 +375,7 @@ EXPORT_SYMBOL(ath_reg_notifier_apply);
 
 static bool ath_regd_is_eeprom_valid(struct ath_regulatory *reg)
 {
-	 u16 rd = ath_regd_get_eepromRD(reg);
+	u16 rd = ath_regd_get_eepromRD(reg);
 	int i;
 
 	if (rd & COUNTRY_ERD_FLAG) {
@@ -461,7 +476,7 @@ ath_regd_init_wiphy(struct ath_regulatory *reg,
 		wiphy->flags |= WIPHY_FLAG_CUSTOM_REGULATORY;
 	} else {
 		/*
-		 * This gets applied in the case of the absense of CRDA,
+		 * This gets applied in the case of the absence of CRDA,
 		 * it's our own custom world regulatory domain, similar to
 		 * cfg80211's but we enable passive scanning.
 		 */

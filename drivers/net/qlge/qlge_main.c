@@ -62,15 +62,15 @@ static const u32 default_msg =
 /* NETIF_MSG_PKTDATA | */
     NETIF_MSG_HW | NETIF_MSG_WOL | 0;
 
-static int debug = 0x00007fff;	/* defaults above */
-module_param(debug, int, 0);
+static int debug = -1;	/* defaults above */
+module_param(debug, int, 0664);
 MODULE_PARM_DESC(debug, "Debug level (0=none,...,16=all)");
 
 #define MSIX_IRQ 0
 #define MSI_IRQ 1
 #define LEG_IRQ 2
 static int qlge_irq_type = MSIX_IRQ;
-module_param(qlge_irq_type, int, MSIX_IRQ);
+module_param(qlge_irq_type, int, 0664);
 MODULE_PARM_DESC(qlge_irq_type, "0 = MSI-X, 1 = MSI, 2 = Legacy.");
 
 static int qlge_mpi_coredump;
@@ -93,6 +93,9 @@ static DEFINE_PCI_DEVICE_TABLE(qlge_pci_tbl) = {
 };
 
 MODULE_DEVICE_TABLE(pci, qlge_pci_tbl);
+
+static int ql_wol(struct ql_adapter *qdev);
+static void qlge_set_multicast_list(struct net_device *ndev);
 
 /* This hardware semaphore causes exclusive access to
  * resources shared between the NIC driver, MPI firmware,
@@ -574,6 +577,22 @@ static int ql_set_routing_reg(struct ql_adapter *qdev, u32 index, u32 mask,
 			    (RT_IDX_ALL_ERR_SLOT << RT_IDX_IDX_SHIFT);/* index */
 			break;
 		}
+	case RT_IDX_IP_CSUM_ERR: /* Pass up IP CSUM error frames. */
+		{
+			value = RT_IDX_DST_DFLT_Q | /* dest */
+				RT_IDX_TYPE_NICQ | /* type */
+				(RT_IDX_IP_CSUM_ERR_SLOT <<
+				RT_IDX_IDX_SHIFT); /* index */
+			break;
+		}
+	case RT_IDX_TU_CSUM_ERR: /* Pass up TCP/UDP CSUM error frames. */
+		{
+			value = RT_IDX_DST_DFLT_Q | /* dest */
+				RT_IDX_TYPE_NICQ | /* type */
+				(RT_IDX_TCP_UDP_CSUM_ERR_SLOT <<
+				RT_IDX_IDX_SHIFT); /* index */
+			break;
+		}
 	case RT_IDX_BCAST:	/* Pass up Broadcast frames to default Q. */
 		{
 			value = RT_IDX_DST_DFLT_Q |	/* dest */
@@ -641,7 +660,7 @@ static void ql_disable_interrupts(struct ql_adapter *qdev)
 /* If we're running with multiple MSI-X vectors then we enable on the fly.
  * Otherwise, we may have multiple outstanding workers and don't want to
  * enable until the last one finishes. In this case, the irq_cnt gets
- * incremented everytime we queue a worker and decremented everytime
+ * incremented every time we queue a worker and decremented every time
  * a worker finishes.  Once it hits zero we enable the interrupt.
  */
 u32 ql_enable_completion_interrupt(struct ql_adapter *qdev, u32 intr)
@@ -1057,7 +1076,7 @@ static struct bq_desc *ql_get_curr_lchunk(struct ql_adapter *qdev,
 	struct bq_desc *lbq_desc = ql_get_curr_lbuf(rx_ring);
 
 	pci_dma_sync_single_for_cpu(qdev->pdev,
-					pci_unmap_addr(lbq_desc, mapaddr),
+					dma_unmap_addr(lbq_desc, mapaddr),
 				    rx_ring->lbq_buf_size,
 					PCI_DMA_FROMDEVICE);
 
@@ -1170,8 +1189,8 @@ static void ql_update_lbq(struct ql_adapter *qdev, struct rx_ring *rx_ring)
 
 			map = lbq_desc->p.pg_chunk.map +
 				lbq_desc->p.pg_chunk.offset;
-				pci_unmap_addr_set(lbq_desc, mapaddr, map);
-			pci_unmap_len_set(lbq_desc, maplen,
+				dma_unmap_addr_set(lbq_desc, mapaddr, map);
+			dma_unmap_len_set(lbq_desc, maplen,
 					rx_ring->lbq_buf_size);
 				*lbq_desc->addr = cpu_to_le64(map);
 
@@ -1241,8 +1260,8 @@ static void ql_update_sbq(struct ql_adapter *qdev, struct rx_ring *rx_ring)
 					sbq_desc->p.skb = NULL;
 					return;
 				}
-				pci_unmap_addr_set(sbq_desc, mapaddr, map);
-				pci_unmap_len_set(sbq_desc, maplen,
+				dma_unmap_addr_set(sbq_desc, mapaddr, map);
+				dma_unmap_len_set(sbq_desc, maplen,
 						  rx_ring->sbq_buf_size);
 				*sbq_desc->addr = cpu_to_le64(map);
 			}
@@ -1298,18 +1317,18 @@ static void ql_unmap_send(struct ql_adapter *qdev,
 					     "unmapping OAL area.\n");
 			}
 			pci_unmap_single(qdev->pdev,
-					 pci_unmap_addr(&tx_ring_desc->map[i],
+					 dma_unmap_addr(&tx_ring_desc->map[i],
 							mapaddr),
-					 pci_unmap_len(&tx_ring_desc->map[i],
+					 dma_unmap_len(&tx_ring_desc->map[i],
 						       maplen),
 					 PCI_DMA_TODEVICE);
 		} else {
 			netif_printk(qdev, tx_done, KERN_DEBUG, qdev->ndev,
 				     "unmapping frag %d.\n", i);
 			pci_unmap_page(qdev->pdev,
-				       pci_unmap_addr(&tx_ring_desc->map[i],
+				       dma_unmap_addr(&tx_ring_desc->map[i],
 						      mapaddr),
-				       pci_unmap_len(&tx_ring_desc->map[i],
+				       dma_unmap_len(&tx_ring_desc->map[i],
 						     maplen), PCI_DMA_TODEVICE);
 		}
 	}
@@ -1348,8 +1367,8 @@ static int ql_map_send(struct ql_adapter *qdev,
 
 	tbd->len = cpu_to_le32(len);
 	tbd->addr = cpu_to_le64(map);
-	pci_unmap_addr_set(&tx_ring_desc->map[map_idx], mapaddr, map);
-	pci_unmap_len_set(&tx_ring_desc->map[map_idx], maplen, len);
+	dma_unmap_addr_set(&tx_ring_desc->map[map_idx], mapaddr, map);
+	dma_unmap_len_set(&tx_ring_desc->map[map_idx], maplen, len);
 	map_idx++;
 
 	/*
@@ -1402,9 +1421,9 @@ static int ql_map_send(struct ql_adapter *qdev,
 			tbd->len =
 			    cpu_to_le32((sizeof(struct tx_buf_desc) *
 					 (frag_cnt - frag_idx)) | TX_DESC_C);
-			pci_unmap_addr_set(&tx_ring_desc->map[map_idx], mapaddr,
+			dma_unmap_addr_set(&tx_ring_desc->map[map_idx], mapaddr,
 					   map);
-			pci_unmap_len_set(&tx_ring_desc->map[map_idx], maplen,
+			dma_unmap_len_set(&tx_ring_desc->map[map_idx], maplen,
 					  sizeof(struct oal));
 			tbd = (struct tx_buf_desc *)&tx_ring_desc->oal;
 			map_idx++;
@@ -1425,8 +1444,8 @@ static int ql_map_send(struct ql_adapter *qdev,
 
 		tbd->addr = cpu_to_le64(map);
 		tbd->len = cpu_to_le32(frag->size);
-		pci_unmap_addr_set(&tx_ring_desc->map[map_idx], mapaddr, map);
-		pci_unmap_len_set(&tx_ring_desc->map[map_idx], maplen,
+		dma_unmap_addr_set(&tx_ring_desc->map[map_idx], mapaddr, map);
+		dma_unmap_len_set(&tx_ring_desc->map[map_idx], maplen,
 				  frag->size);
 
 	}
@@ -1521,7 +1540,7 @@ static void ql_process_mac_rx_page(struct ql_adapter *qdev,
 
 	/* Frame error, so drop the packet. */
 	if (ib_mac_rsp->flags2 & IB_MAC_IOCB_RSP_ERR_MASK) {
-		netif_err(qdev, drv, qdev->ndev,
+		netif_info(qdev, drv, qdev->ndev,
 			  "Receive error, flags2 = 0x%x\n", ib_mac_rsp->flags2);
 		rx_ring->rx_errors++;
 		goto err_out;
@@ -1550,7 +1569,7 @@ static void ql_process_mac_rx_page(struct ql_adapter *qdev,
 	rx_ring->rx_packets++;
 	rx_ring->rx_bytes += skb->len;
 	skb->protocol = eth_type_trans(skb, ndev);
-	skb->ip_summed = CHECKSUM_NONE;
+	skb_checksum_none_assert(skb);
 
 	if (qdev->rx_csum &&
 		!(ib_mac_rsp->flags1 & IB_MAC_CSUM_ERR_MASK)) {
@@ -1618,7 +1637,7 @@ static void ql_process_mac_rx_skb(struct ql_adapter *qdev,
 
 	/* Frame error, so drop the packet. */
 	if (ib_mac_rsp->flags2 & IB_MAC_IOCB_RSP_ERR_MASK) {
-		netif_err(qdev, drv, qdev->ndev,
+		netif_info(qdev, drv, qdev->ndev,
 			  "Receive error, flags2 = 0x%x\n", ib_mac_rsp->flags2);
 		dev_kfree_skb_any(skb);
 		rx_ring->rx_errors++;
@@ -1660,7 +1679,7 @@ static void ql_process_mac_rx_skb(struct ql_adapter *qdev,
 	rx_ring->rx_packets++;
 	rx_ring->rx_bytes += skb->len;
 	skb->protocol = eth_type_trans(skb, ndev);
-	skb->ip_summed = CHECKSUM_NONE;
+	skb_checksum_none_assert(skb);
 
 	/* If rx checksum is on, and there are no
 	 * csum or frame errors.
@@ -1677,7 +1696,7 @@ static void ql_process_mac_rx_skb(struct ql_adapter *qdev,
 			/* Unfragmented ipv4 UDP frame. */
 			struct iphdr *iph = (struct iphdr *) skb->data;
 			if (!(iph->frag_off &
-				cpu_to_be16(IP_MF|IP_OFFSET))) {
+				ntohs(IP_MF|IP_OFFSET))) {
 				skb->ip_summed = CHECKSUM_UNNECESSARY;
 				netif_printk(qdev, rx_status, KERN_DEBUG,
 					     qdev->ndev,
@@ -1742,8 +1761,8 @@ static struct sk_buff *ql_build_rx_skb(struct ql_adapter *qdev,
 		 */
 		sbq_desc = ql_get_curr_sbuf(rx_ring);
 		pci_unmap_single(qdev->pdev,
-				pci_unmap_addr(sbq_desc, mapaddr),
-				pci_unmap_len(sbq_desc, maplen),
+				dma_unmap_addr(sbq_desc, mapaddr),
+				dma_unmap_len(sbq_desc, maplen),
 				PCI_DMA_FROMDEVICE);
 		skb = sbq_desc->p.skb;
 		ql_realign_skb(skb, hdr_len);
@@ -1774,18 +1793,18 @@ static struct sk_buff *ql_build_rx_skb(struct ql_adapter *qdev,
 			 */
 			sbq_desc = ql_get_curr_sbuf(rx_ring);
 			pci_dma_sync_single_for_cpu(qdev->pdev,
-						    pci_unmap_addr
+						    dma_unmap_addr
 						    (sbq_desc, mapaddr),
-						    pci_unmap_len
+						    dma_unmap_len
 						    (sbq_desc, maplen),
 						    PCI_DMA_FROMDEVICE);
 			memcpy(skb_put(skb, length),
 			       sbq_desc->p.skb->data, length);
 			pci_dma_sync_single_for_device(qdev->pdev,
-						       pci_unmap_addr
+						       dma_unmap_addr
 						       (sbq_desc,
 							mapaddr),
-						       pci_unmap_len
+						       dma_unmap_len
 						       (sbq_desc,
 							maplen),
 						       PCI_DMA_FROMDEVICE);
@@ -1798,9 +1817,9 @@ static struct sk_buff *ql_build_rx_skb(struct ql_adapter *qdev,
 			ql_realign_skb(skb, length);
 			skb_put(skb, length);
 			pci_unmap_single(qdev->pdev,
-					 pci_unmap_addr(sbq_desc,
+					 dma_unmap_addr(sbq_desc,
 							mapaddr),
-					 pci_unmap_len(sbq_desc,
+					 dma_unmap_len(sbq_desc,
 						       maplen),
 					 PCI_DMA_FROMDEVICE);
 			sbq_desc->p.skb = NULL;
@@ -1839,9 +1858,9 @@ static struct sk_buff *ql_build_rx_skb(struct ql_adapter *qdev,
 				return NULL;
 			}
 			pci_unmap_page(qdev->pdev,
-				       pci_unmap_addr(lbq_desc,
+				       dma_unmap_addr(lbq_desc,
 						      mapaddr),
-				       pci_unmap_len(lbq_desc, maplen),
+				       dma_unmap_len(lbq_desc, maplen),
 				       PCI_DMA_FROMDEVICE);
 			skb_reserve(skb, NET_IP_ALIGN);
 			netif_printk(qdev, rx_status, KERN_DEBUG, qdev->ndev,
@@ -1874,8 +1893,8 @@ static struct sk_buff *ql_build_rx_skb(struct ql_adapter *qdev,
 		int size, i = 0;
 		sbq_desc = ql_get_curr_sbuf(rx_ring);
 		pci_unmap_single(qdev->pdev,
-				 pci_unmap_addr(sbq_desc, mapaddr),
-				 pci_unmap_len(sbq_desc, maplen),
+				 dma_unmap_addr(sbq_desc, mapaddr),
+				 dma_unmap_len(sbq_desc, maplen),
 				 PCI_DMA_FROMDEVICE);
 		if (!(ib_mac_rsp->flags4 & IB_MAC_IOCB_RSP_HS)) {
 			/*
@@ -1939,7 +1958,7 @@ static void ql_process_mac_split_rx_intr(struct ql_adapter *qdev,
 
 	/* Frame error, so drop the packet. */
 	if (ib_mac_rsp->flags2 & IB_MAC_IOCB_RSP_ERR_MASK) {
-		netif_err(qdev, drv, qdev->ndev,
+		netif_info(qdev, drv, qdev->ndev,
 			  "Receive error, flags2 = 0x%x\n", ib_mac_rsp->flags2);
 		dev_kfree_skb_any(skb);
 		rx_ring->rx_errors++;
@@ -1980,7 +1999,7 @@ static void ql_process_mac_split_rx_intr(struct ql_adapter *qdev,
 	}
 
 	skb->protocol = eth_type_trans(skb, ndev);
-	skb->ip_summed = CHECKSUM_NONE;
+	skb_checksum_none_assert(skb);
 
 	/* If rx checksum is on, and there are no
 	 * csum or frame errors.
@@ -1997,7 +2016,7 @@ static void ql_process_mac_split_rx_intr(struct ql_adapter *qdev,
 		/* Unfragmented ipv4 UDP frame. */
 			struct iphdr *iph = (struct iphdr *) skb->data;
 			if (!(iph->frag_off &
-				cpu_to_be16(IP_MF|IP_OFFSET))) {
+				ntohs(IP_MF|IP_OFFSET))) {
 				skb->ip_summed = CHECKSUM_UNNECESSARY;
 				netif_printk(qdev, rx_status, KERN_DEBUG, qdev->ndev,
 					     "TCP checksum done!\n");
@@ -2206,10 +2225,11 @@ static int ql_clean_outbound_rx_ring(struct rx_ring *rx_ring)
 		ql_update_cq(rx_ring);
 		prod = ql_read_sh_reg(rx_ring->prod_idx_sh_reg);
 	}
+	if (!net_rsp)
+		return 0;
 	ql_write_cq_idx(rx_ring);
 	tx_ring = &qdev->tx_ring[net_rsp->txq_idx];
-	if (__netif_subqueue_stopped(qdev->ndev, tx_ring->wq_id) &&
-					net_rsp != NULL) {
+	if (__netif_subqueue_stopped(qdev->ndev, tx_ring->wq_id)) {
 		if (atomic_read(&tx_ring->queue_stopped) &&
 		    (atomic_read(&tx_ring->tx_count) > (tx_ring->wq_len / 4)))
 			/*
@@ -2363,6 +2383,20 @@ static void qlge_vlan_rx_kill_vid(struct net_device *ndev, u16 vid)
 	}
 	ql_sem_unlock(qdev, SEM_MAC_ADDR_MASK);
 
+}
+
+static void qlge_restore_vlan(struct ql_adapter *qdev)
+{
+	qlge_vlan_rx_register(qdev->ndev, qdev->vlgrp);
+
+	if (qdev->vlgrp) {
+		u16 vid;
+		for (vid = 0; vid < VLAN_N_VID; vid++) {
+			if (!vlan_group_get_device(qdev->vlgrp, vid))
+				continue;
+			qlge_vlan_rx_add_vid(qdev->ndev, vid);
+		}
+	}
 }
 
 /* MSI-X Multiple Vector Interrupt Handler for inbound completions. */
@@ -2555,7 +2589,7 @@ static netdev_tx_t qlge_send(struct sk_buff *skb, struct net_device *ndev)
 
 	mac_iocb_ptr->frame_len = cpu_to_le16((u16) skb->len);
 
-	if (qdev->vlgrp && vlan_tx_tag_present(skb)) {
+	if (vlan_tx_tag_present(skb)) {
 		netif_printk(qdev, tx_queued, KERN_DEBUG, qdev->ndev,
 			     "Adding a vlan tag %d.\n", vlan_tx_tag_get(skb));
 		mac_iocb_ptr->flags3 |= OB_MAC_IOCB_V;
@@ -2737,8 +2771,8 @@ static void ql_free_sbq_buffers(struct ql_adapter *qdev, struct rx_ring *rx_ring
 		}
 		if (sbq_desc->p.skb) {
 			pci_unmap_single(qdev->pdev,
-					 pci_unmap_addr(sbq_desc, mapaddr),
-					 pci_unmap_len(sbq_desc, maplen),
+					 dma_unmap_addr(sbq_desc, mapaddr),
+					 dma_unmap_len(sbq_desc, maplen),
 					 PCI_DMA_FROMDEVICE);
 			dev_kfree_skb(sbq_desc->p.skb);
 			sbq_desc->p.skb = NULL;
@@ -3265,7 +3299,7 @@ msi:
  * will service it.  An example would be if there are
  * 2 vectors (so 2 RSS rings) and 8 TX completion rings.
  * This would mean that vector 0 would service RSS ring 0
- * and TX competion rings 0,1,2 and 3.  Vector 1 would
+ * and TX completion rings 0,1,2 and 3.  Vector 1 would
  * service RSS ring 1 and TX completion rings 4,5,6 and 7.
  */
 static void ql_set_tx_vect(struct ql_adapter *qdev)
@@ -3514,12 +3548,13 @@ err_irq:
 
 static int ql_start_rss(struct ql_adapter *qdev)
 {
-	u8 init_hash_seed[] = {0x6d, 0x5a, 0x56, 0xda, 0x25, 0x5b, 0x0e, 0xc2,
-				0x41, 0x67, 0x25, 0x3d, 0x43, 0xa3, 0x8f,
-				0xb0, 0xd0, 0xca, 0x2b, 0xcb, 0xae, 0x7b,
-				0x30, 0xb4, 0x77, 0xcb, 0x2d, 0xa3, 0x80,
-				0x30, 0xf2, 0x0c, 0x6a, 0x42, 0xb7, 0x3b,
-				0xbe, 0xac, 0x01, 0xfa};
+	static const u8 init_hash_seed[] = {
+		0x6d, 0x5a, 0x56, 0xda, 0x25, 0x5b, 0x0e, 0xc2,
+		0x41, 0x67, 0x25, 0x3d, 0x43, 0xa3, 0x8f, 0xb0,
+		0xd0, 0xca, 0x2b, 0xcb, 0xae, 0x7b, 0x30, 0xb4,
+		0x77, 0xcb, 0x2d, 0xa3, 0x80, 0x30, 0xf2, 0x0c,
+		0x6a, 0x42, 0xb7, 0x3b, 0xbe, 0xac, 0x01, 0xfa
+	};
 	struct ricb *ricb = &qdev->ricb;
 	int status = 0;
 	int i;
@@ -3587,10 +3622,20 @@ static int ql_route_initialize(struct ql_adapter *qdev)
 	if (status)
 		return status;
 
-	status = ql_set_routing_reg(qdev, RT_IDX_ALL_ERR_SLOT, RT_IDX_ERR, 1);
+	status = ql_set_routing_reg(qdev, RT_IDX_IP_CSUM_ERR_SLOT,
+						RT_IDX_IP_CSUM_ERR, 1);
 	if (status) {
 		netif_err(qdev, ifup, qdev->ndev,
-			  "Failed to init routing register for error packets.\n");
+			"Failed to init routing register "
+			"for IP CSUM error packets.\n");
+		goto exit;
+	}
+	status = ql_set_routing_reg(qdev, RT_IDX_TCP_UDP_CSUM_ERR_SLOT,
+						RT_IDX_TU_CSUM_ERR, 1);
+	if (status) {
+		netif_err(qdev, ifup, qdev->ndev,
+			"Failed to init routing register "
+			"for TCP/UDP CSUM error packets.\n");
 		goto exit;
 	}
 	status = ql_set_routing_reg(qdev, RT_IDX_BCAST_SLOT, RT_IDX_BCAST, 1);
@@ -3800,7 +3845,7 @@ static int ql_adapter_reset(struct ql_adapter *qdev)
 
 static void ql_display_dev_info(struct net_device *ndev)
 {
-	struct ql_adapter *qdev = (struct ql_adapter *)netdev_priv(ndev);
+	struct ql_adapter *qdev = netdev_priv(ndev);
 
 	netif_info(qdev, probe, qdev->ndev,
 		   "Function #%d, Port %d, NIC Roll %d, NIC Rev = %d, "
@@ -3815,7 +3860,7 @@ static void ql_display_dev_info(struct net_device *ndev)
 		   "MAC address %pM\n", ndev->dev_addr);
 }
 
-int ql_wol(struct ql_adapter *qdev)
+static int ql_wol(struct ql_adapter *qdev)
 {
 	int status = 0;
 	u32 wol = MB_WOL_DISABLE;
@@ -3862,11 +3907,8 @@ int ql_wol(struct ql_adapter *qdev)
 	return status;
 }
 
-static int ql_adapter_down(struct ql_adapter *qdev)
+static void ql_cancel_all_work_sync(struct ql_adapter *qdev)
 {
-	int i, status = 0;
-
-	ql_link_off(qdev);
 
 	/* Don't kill the reset worker thread if we
 	 * are in the process of recovery.
@@ -3878,6 +3920,15 @@ static int ql_adapter_down(struct ql_adapter *qdev)
 	cancel_delayed_work_sync(&qdev->mpi_idc_work);
 	cancel_delayed_work_sync(&qdev->mpi_core_to_log);
 	cancel_delayed_work_sync(&qdev->mpi_port_cfg_work);
+}
+
+static int ql_adapter_down(struct ql_adapter *qdev)
+{
+	int i, status = 0;
+
+	ql_link_off(qdev);
+
+	ql_cancel_all_work_sync(qdev);
 
 	for (i = 0; i < qdev->rss_ring_count; i++)
 		napi_disable(&qdev->rx_ring[i].napi);
@@ -3893,12 +3944,12 @@ static int ql_adapter_down(struct ql_adapter *qdev)
 	for (i = 0; i < qdev->rss_ring_count; i++)
 		netif_napi_del(&qdev->rx_ring[i].napi);
 
-	ql_free_rx_buffers(qdev);
-
 	status = ql_adapter_reset(qdev);
 	if (status)
 		netif_err(qdev, ifdown, qdev->ndev, "reset(func #%d) FAILED!\n",
 			  qdev->func);
+	ql_free_rx_buffers(qdev);
+
 	return status;
 }
 
@@ -3919,6 +3970,14 @@ static int ql_adapter_up(struct ql_adapter *qdev)
 	if ((ql_read32(qdev, STS) & qdev->port_init) &&
 			(ql_read32(qdev, STS) & qdev->port_link_up))
 		ql_link_on(qdev);
+	/* Restore rx mode. */
+	clear_bit(QL_ALLMULTI, &qdev->flags);
+	clear_bit(QL_PROMISCUOUS, &qdev->flags);
+	qlge_set_multicast_list(qdev->ndev);
+
+	/* Restore vlan setting. */
+	qlge_restore_vlan(qdev);
+
 	ql_enable_interrupts(qdev);
 	ql_enable_all_completion_interrupts(qdev);
 	netif_tx_start_all_queues(qdev->ndev);
@@ -4093,7 +4152,7 @@ static int ql_change_rx_buffers(struct ql_adapter *qdev)
 	int i, status;
 	u32 lbq_buf_len;
 
-	/* Wait for an oustanding reset to complete. */
+	/* Wait for an outstanding reset to complete. */
 	if (!test_bit(QL_ADAPTER_UP, &qdev->flags)) {
 		int i = 3;
 		while (i-- && !test_bit(QL_ADAPTER_UP, &qdev->flags)) {
@@ -4206,8 +4265,8 @@ static struct net_device_stats *qlge_get_stats(struct net_device
 
 static void qlge_set_multicast_list(struct net_device *ndev)
 {
-	struct ql_adapter *qdev = (struct ql_adapter *)netdev_priv(ndev);
-	struct dev_mc_list *mc_ptr;
+	struct ql_adapter *qdev = netdev_priv(ndev);
+	struct netdev_hw_addr *ha;
 	int i, status;
 
 	status = ql_sem_spinlock(qdev, SEM_RT_IDX_MASK);
@@ -4222,7 +4281,7 @@ static void qlge_set_multicast_list(struct net_device *ndev)
 			if (ql_set_routing_reg
 			    (qdev, RT_IDX_PROMISCUOUS_SLOT, RT_IDX_VALID, 1)) {
 				netif_err(qdev, hw, qdev->ndev,
-					  "Failed to set promiscous mode.\n");
+					  "Failed to set promiscuous mode.\n");
 			} else {
 				set_bit(QL_PROMISCUOUS, &qdev->flags);
 			}
@@ -4232,7 +4291,7 @@ static void qlge_set_multicast_list(struct net_device *ndev)
 			if (ql_set_routing_reg
 			    (qdev, RT_IDX_PROMISCUOUS_SLOT, RT_IDX_VALID, 0)) {
 				netif_err(qdev, hw, qdev->ndev,
-					  "Failed to clear promiscous mode.\n");
+					  "Failed to clear promiscuous mode.\n");
 			} else {
 				clear_bit(QL_PROMISCUOUS, &qdev->flags);
 			}
@@ -4271,8 +4330,8 @@ static void qlge_set_multicast_list(struct net_device *ndev)
 		if (status)
 			goto exit;
 		i = 0;
-		netdev_for_each_mc_addr(mc_ptr, ndev) {
-			if (ql_set_mac_addr_reg(qdev, (u8 *) mc_ptr->dmi_addr,
+		netdev_for_each_mc_addr(ha, ndev) {
+			if (ql_set_mac_addr_reg(qdev, (u8 *) ha->addr,
 						MAC_ADDR_TYPE_MULTI_MAC, i)) {
 				netif_err(qdev, hw, qdev->ndev,
 					  "Failed to loadmulticast address.\n");
@@ -4296,7 +4355,7 @@ exit:
 
 static int qlge_set_mac_address(struct net_device *ndev, void *p)
 {
-	struct ql_adapter *qdev = (struct ql_adapter *)netdev_priv(ndev);
+	struct ql_adapter *qdev = netdev_priv(ndev);
 	struct sockaddr *addr = p;
 	int status;
 
@@ -4319,7 +4378,7 @@ static int qlge_set_mac_address(struct net_device *ndev, void *p)
 
 static void qlge_tx_timeout(struct net_device *ndev)
 {
-	struct ql_adapter *qdev = (struct ql_adapter *)netdev_priv(ndev);
+	struct ql_adapter *qdev = netdev_priv(ndev);
 	ql_queue_asic_error(qdev);
 }
 
@@ -4571,6 +4630,7 @@ static int __devinit ql_init_device(struct pci_dev *pdev,
 	INIT_DELAYED_WORK(&qdev->mpi_idc_work, ql_mpi_idc_work);
 	INIT_DELAYED_WORK(&qdev->mpi_core_to_log, ql_mpi_core_to_log);
 	init_completion(&qdev->ide_completion);
+	mutex_init(&qdev->mpi_mutex);
 
 	if (!cards_found) {
 		dev_info(&pdev->dev, "%s\n", DRV_STRING);
@@ -4611,8 +4671,7 @@ static void ql_timer(unsigned long data)
 		return;
 	}
 
-	qdev->timer.expires = jiffies + (5*HZ);
-	add_timer(&qdev->timer);
+	mod_timer(&qdev->timer, jiffies + (5*HZ));
 }
 
 static int __devinit qlge_probe(struct pci_dev *pdev,
@@ -4696,6 +4755,7 @@ static void __devexit qlge_remove(struct pci_dev *pdev)
 	struct net_device *ndev = pci_get_drvdata(pdev);
 	struct ql_adapter *qdev = netdev_priv(ndev);
 	del_timer_sync(&qdev->timer);
+	ql_cancel_all_work_sync(qdev);
 	unregister_netdev(ndev);
 	ql_release_all(pdev);
 	pci_disable_device(pdev);
@@ -4713,13 +4773,9 @@ static void ql_eeh_close(struct net_device *ndev)
 		netif_stop_queue(ndev);
 	}
 
-	if (test_bit(QL_ADAPTER_UP, &qdev->flags))
-		cancel_delayed_work_sync(&qdev->asic_reset_work);
-	cancel_delayed_work_sync(&qdev->mpi_reset_work);
-	cancel_delayed_work_sync(&qdev->mpi_work);
-	cancel_delayed_work_sync(&qdev->mpi_idc_work);
-	cancel_delayed_work_sync(&qdev->mpi_core_to_log);
-	cancel_delayed_work_sync(&qdev->mpi_port_cfg_work);
+	/* Disabling the timer */
+	del_timer_sync(&qdev->timer);
+	ql_cancel_all_work_sync(qdev);
 
 	for (i = 0; i < qdev->rss_ring_count; i++)
 		netif_napi_del(&qdev->rx_ring[i].napi);
@@ -4808,8 +4864,7 @@ static void qlge_io_resume(struct pci_dev *pdev)
 		netif_err(qdev, ifup, qdev->ndev,
 			  "Device was not running prior to EEH.\n");
 	}
-	qdev->timer.expires = jiffies + (5*HZ);
-	add_timer(&qdev->timer);
+	mod_timer(&qdev->timer, jiffies + (5*HZ));
 	netif_device_attach(ndev);
 }
 
@@ -4871,8 +4926,7 @@ static int qlge_resume(struct pci_dev *pdev)
 			return err;
 	}
 
-	qdev->timer.expires = jiffies + (5*HZ);
-	add_timer(&qdev->timer);
+	mod_timer(&qdev->timer, jiffies + (5*HZ));
 	netif_device_attach(ndev);
 
 	return 0;

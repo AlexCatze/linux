@@ -535,7 +535,6 @@ static int de620_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 	de620_write_block(dev, buffer, skb->len, len-skb->len);
 
-	dev->trans_start = jiffies;
 	if(!(using_txbuf == (TXBF0 | TXBF1)))
 		netif_wake_queue(dev);
 
@@ -677,7 +676,7 @@ static int de620_rx_intr(struct net_device *dev)
 	de620_set_register(dev, W_NPRF, next_rx_page);
 	pr_debug("next_rx_page=%d CPR=%d\n", next_rx_page, curr_page);
 
-	return (next_rx_page != curr_page); /* That was slightly tricky... */
+	return next_rx_page != curr_page; /* That was slightly tricky... */
 }
 
 /*********************************************

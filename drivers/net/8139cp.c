@@ -322,7 +322,7 @@ struct cp_dma_stats {
 	__le32			rx_ok_mcast;
 	__le16			tx_abort;
 	__le16			tx_underrun;
-} __attribute__((packed));
+} __packed;
 
 struct cp_extra_stats {
 	unsigned long		rx_frags;
@@ -490,13 +490,11 @@ static inline unsigned int cp_rx_csum_ok (u32 status)
 {
 	unsigned int protocol = (status >> 16) & 0x3;
 
-	if (likely((protocol == RxProtoTCP) && (!(status & TCPFail))))
+	if (((protocol == RxProtoTCP) && !(status & TCPFail)) ||
+	    ((protocol == RxProtoUDP) && !(status & UDPFail)))
 		return 1;
-	else if ((protocol == RxProtoUDP) && (!(status & UDPFail)))
-		return 1;
-	else if ((protocol == RxProtoIP) && (!(status & IPFail)))
-		return 1;
-	return 0;
+	else
+		return 0;
 }
 
 static int cp_rx_poll(struct napi_struct *napi, int budget)
@@ -561,7 +559,7 @@ rx_status_loop:
 		if (cp_rx_csum_ok(status))
 			skb->ip_summed = CHECKSUM_UNNECESSARY;
 		else
-			skb->ip_summed = CHECKSUM_NONE;
+			skb_checksum_none_assert(skb);
 
 		skb_put(skb, len);
 
@@ -598,8 +596,8 @@ rx_next:
 			goto rx_status_loop;
 
 		spin_lock_irqsave(&cp->lock, flags);
-		cpw16_f(IntrMask, cp_intr_mask);
 		__napi_complete(napi);
+		cpw16_f(IntrMask, cp_intr_mask);
 		spin_unlock_irqrestore(&cp->lock, flags);
 	}
 
@@ -754,7 +752,7 @@ static netdev_tx_t cp_start_xmit (struct sk_buff *skb,
 	}
 
 #if CP_VLAN_TAG_USED
-	if (cp->vlgrp && vlan_tx_tag_present(skb))
+	if (vlan_tx_tag_present(skb))
 		vlan_tag = TxVlanTag | swab16(vlan_tx_tag_get(skb));
 #endif
 
@@ -882,7 +880,6 @@ static netdev_tx_t cp_start_xmit (struct sk_buff *skb,
 	spin_unlock_irqrestore(&cp->lock, intr_flags);
 
 	cpw8(TxPoll, NormalTxPoll);
-	dev->trans_start = jiffies;
 
 	return NETDEV_TX_OK;
 }
@@ -910,11 +907,11 @@ static void __cp_set_rx_mode (struct net_device *dev)
 		rx_mode = AcceptBroadcast | AcceptMulticast | AcceptMyPhys;
 		mc_filter[1] = mc_filter[0] = 0xffffffff;
 	} else {
-		struct dev_mc_list *mclist;
+		struct netdev_hw_addr *ha;
 		rx_mode = AcceptBroadcast | AcceptMyPhys;
 		mc_filter[1] = mc_filter[0] = 0;
-		netdev_for_each_mc_addr(mclist, dev) {
-			int bit_nr = ether_crc(ETH_ALEN, mclist->dmi_addr) >> 26;
+		netdev_for_each_mc_addr(ha, dev) {
+			int bit_nr = ether_crc(ETH_ALEN, ha->addr) >> 26;
 
 			mc_filter[bit_nr >> 5] |= 1 << (bit_nr & 31);
 			rx_mode |= AcceptMulticast;
@@ -1225,8 +1222,6 @@ static void cp_tx_timeout(struct net_device *dev)
 	netif_wake_queue(dev);
 
 	spin_unlock_irqrestore(&cp->lock, flags);
-
-	return;
 }
 
 #ifdef BROKEN

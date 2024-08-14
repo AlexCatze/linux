@@ -16,6 +16,7 @@
 #include <linux/fs.h>
 #include <linux/module.h>
 #include <linux/blkdev.h>
+#include <linux/mutex.h>
 #include <linux/interrupt.h>
 #include <linux/buffer_head.h>
 #include <linux/kernel.h>
@@ -44,16 +45,17 @@
 /*
  * file operation structure for tape block frontend
  */
+static DEFINE_MUTEX(tape_block_mutex);
 static int tapeblock_open(struct block_device *, fmode_t);
 static int tapeblock_release(struct gendisk *, fmode_t);
-static int tapeblock_medium_changed(struct gendisk *);
+static unsigned int tapeblock_check_events(struct gendisk *, unsigned int);
 static int tapeblock_revalidate_disk(struct gendisk *);
 
 static const struct block_device_operations tapeblock_fops = {
 	.owner		 = THIS_MODULE,
 	.open		 = tapeblock_open,
 	.release	 = tapeblock_release,
-	.media_changed   = tapeblock_medium_changed,
+	.check_events	 = tapeblock_check_events,
 	.revalidate_disk = tapeblock_revalidate_disk,
 };
 
@@ -159,7 +161,6 @@ tapeblock_requeue(struct work_struct *work) {
 
 	spin_lock_irq(&device->blk_data.request_queue_lock);
 	while (
-		!blk_queue_plugged(queue) &&
 		blk_peek_request(queue) &&
 		nr_queued < TAPEBLOCK_MIN_REQUEUE
 	) {
@@ -216,8 +217,7 @@ tapeblock_setup_device(struct tape_device * device)
 	if (!blkdat->request_queue)
 		return -ENOMEM;
 
-	elevator_exit(blkdat->request_queue->elevator);
-	rc = elevator_init(blkdat->request_queue, "noop");
+	rc = elevator_change(blkdat->request_queue, "noop");
 	if (rc)
 		goto cleanup_queue;
 
@@ -263,7 +263,7 @@ cleanup_queue:
 void
 tapeblock_cleanup_device(struct tape_device *device)
 {
-	flush_scheduled_work();
+	flush_work_sync(&device->blk_data.requeue_task);
 	tape_put_device(device);
 
 	if (!device->blk_data.disk) {
@@ -339,8 +339,8 @@ tapeblock_revalidate_disk(struct gendisk *disk)
 	return 0;
 }
 
-static int
-tapeblock_medium_changed(struct gendisk *disk)
+static unsigned int
+tapeblock_check_events(struct gendisk *disk, unsigned int clearing)
 {
 	struct tape_device *device;
 
@@ -348,7 +348,7 @@ tapeblock_medium_changed(struct gendisk *disk)
 	DBF_LH(6, "tapeblock_medium_changed(%p) = %d\n",
 		device, device->blk_data.medium_changed);
 
-	return device->blk_data.medium_changed;
+	return device->blk_data.medium_changed ? DISK_EVENT_MEDIA_CHANGE : 0;
 }
 
 /*
@@ -361,6 +361,7 @@ tapeblock_open(struct block_device *bdev, fmode_t mode)
 	struct tape_device *	device;
 	int			rc;
 
+	mutex_lock(&tape_block_mutex);
 	device = tape_get_device(disk->private_data);
 
 	if (device->required_tapemarks) {
@@ -384,12 +385,14 @@ tapeblock_open(struct block_device *bdev, fmode_t mode)
 	 *       is called.
 	 */
 	tape_state_set(device, TS_BLKUSE);
+	mutex_unlock(&tape_block_mutex);
 	return 0;
 
 release:
 	tape_release(device);
  put_device:
 	tape_put_device(device);
+	mutex_unlock(&tape_block_mutex);
 	return rc;
 }
 
@@ -403,10 +406,12 @@ static int
 tapeblock_release(struct gendisk *disk, fmode_t mode)
 {
 	struct tape_device *device = disk->private_data;
-
+ 
+	mutex_lock(&tape_block_mutex);
 	tape_state_set(device, TS_IN_USE);
 	tape_release(device);
 	tape_put_device(device);
+	mutex_unlock(&tape_block_mutex);
 
 	return 0;
 }

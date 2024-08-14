@@ -68,7 +68,6 @@ static spinlock_t eurwdt_lock;
 
 /*
  * You must set these - there is no sane way to probe for this board.
- * You can use eurwdt=x,y to set these now.
  */
 
 static int io = 0x3f0;
@@ -202,7 +201,7 @@ static void eurwdt_ping(void)
 static ssize_t eurwdt_write(struct file *file, const char __user *buf,
 size_t count, loff_t *ppos)
 {
-	if (count) 	{
+	if (count) {
 		if (!nowayout) {
 			size_t i;
 

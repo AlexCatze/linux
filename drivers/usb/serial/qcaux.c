@@ -36,6 +36,7 @@
 #define UTSTARCOM_PRODUCT_UM175_V1		0x3712
 #define UTSTARCOM_PRODUCT_UM175_V2		0x3714
 #define UTSTARCOM_PRODUCT_UM175_ALLTEL		0x3715
+#define PANTECH_PRODUCT_UML290_VZW		0x3718
 
 /* CMOTECH devices */
 #define CMOTECH_VENDOR_ID			0x16d8
@@ -50,6 +51,10 @@
 #define SANYO_VENDOR_ID				0x0474
 #define SANYO_PRODUCT_KATANA_LX			0x0754 /* SCP-3800 (Katana LX) */
 
+/* Samsung devices */
+#define SAMSUNG_VENDOR_ID			0x04e8
+#define SAMSUNG_PRODUCT_U520			0x6640 /* SCH-U520 */
+
 static struct usb_device_id id_table[] = {
 	{ USB_DEVICE_AND_INTERFACE_INFO(UTSTARCOM_VENDOR_ID, UTSTARCOM_PRODUCT_PC5740, 0xff, 0x00, 0x00) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(UTSTARCOM_VENDOR_ID, UTSTARCOM_PRODUCT_PC5750, 0xff, 0x00, 0x00) },
@@ -61,6 +66,8 @@ static struct usb_device_id id_table[] = {
 	{ USB_DEVICE_AND_INTERFACE_INFO(CMOTECH_VENDOR_ID, CMOTECH_PRODUCT_CDX650, 0xff, 0xff, 0x00) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(LG_VENDOR_ID, LG_PRODUCT_VX4400_6000, 0xff, 0xff, 0x00) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(SANYO_VENDOR_ID, SANYO_PRODUCT_KATANA_LX, 0xff, 0xff, 0x00) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(SAMSUNG_VENDOR_ID, SAMSUNG_PRODUCT_U520, 0xff, 0x00, 0x00) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(UTSTARCOM_VENDOR_ID, PANTECH_PRODUCT_UML290_VZW, 0xff, 0xff, 0xff) },
 	{ },
 };
 MODULE_DEVICE_TABLE(usb, id_table);
@@ -79,6 +86,7 @@ static struct usb_serial_driver qcaux_device = {
 		.name =		"qcaux",
 	},
 	.id_table =		id_table,
+	.usb_driver =		&qcaux_driver,
 	.num_ports =		1,
 };
 

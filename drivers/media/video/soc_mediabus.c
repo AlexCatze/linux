@@ -18,28 +18,28 @@
 #define MBUS_IDX(f) (V4L2_MBUS_FMT_ ## f - V4L2_MBUS_FMT_FIXED - 1)
 
 static const struct soc_mbus_pixelfmt mbus_fmt[] = {
-	[MBUS_IDX(YUYV8_2X8_LE)] = {
+	[MBUS_IDX(YUYV8_2X8)] = {
 		.fourcc			= V4L2_PIX_FMT_YUYV,
 		.name			= "YUYV",
 		.bits_per_sample	= 8,
 		.packing		= SOC_MBUS_PACKING_2X8_PADHI,
 		.order			= SOC_MBUS_ORDER_LE,
 	},
-	[MBUS_IDX(YVYU8_2X8_LE)] = {
+	[MBUS_IDX(YVYU8_2X8)] = {
 		.fourcc			= V4L2_PIX_FMT_YVYU,
 		.name			= "YVYU",
 		.bits_per_sample	= 8,
 		.packing		= SOC_MBUS_PACKING_2X8_PADHI,
 		.order			= SOC_MBUS_ORDER_LE,
 	},
-	[MBUS_IDX(YUYV8_2X8_BE)] = {
+	[MBUS_IDX(UYVY8_2X8)] = {
 		.fourcc			= V4L2_PIX_FMT_UYVY,
 		.name			= "UYVY",
 		.bits_per_sample	= 8,
 		.packing		= SOC_MBUS_PACKING_2X8_PADHI,
 		.order			= SOC_MBUS_ORDER_LE,
 	},
-	[MBUS_IDX(YVYU8_2X8_BE)] = {
+	[MBUS_IDX(VYUY8_2X8)] = {
 		.fourcc			= V4L2_PIX_FMT_VYUY,
 		.name			= "VYUY",
 		.bits_per_sample	= 8,
@@ -88,7 +88,7 @@ static const struct soc_mbus_pixelfmt mbus_fmt[] = {
 		.packing		= SOC_MBUS_PACKING_EXTEND16,
 		.order			= SOC_MBUS_ORDER_LE,
 	},
-	[MBUS_IDX(GREY8_1X8)] = {
+	[MBUS_IDX(Y8_1X8)] = {
 		.fourcc			= V4L2_PIX_FMT_GREY,
 		.name			= "Grey",
 		.bits_per_sample	= 8,
@@ -131,6 +131,20 @@ static const struct soc_mbus_pixelfmt mbus_fmt[] = {
 		.order			= SOC_MBUS_ORDER_BE,
 	},
 };
+
+int soc_mbus_samples_per_pixel(const struct soc_mbus_pixelfmt *mf)
+{
+	switch (mf->packing) {
+	case SOC_MBUS_PACKING_NONE:
+	case SOC_MBUS_PACKING_EXTEND16:
+		return 1;
+	case SOC_MBUS_PACKING_2X8_PADHI:
+	case SOC_MBUS_PACKING_2X8_PADLO:
+		return 2;
+	}
+	return -EINVAL;
+}
+EXPORT_SYMBOL(soc_mbus_samples_per_pixel);
 
 s32 soc_mbus_bytes_per_line(u32 width, const struct soc_mbus_pixelfmt *mf)
 {

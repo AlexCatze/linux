@@ -28,6 +28,7 @@
 #include <linux/phy.h>
 #include <linux/workqueue.h>
 #include <linux/of_mdio.h>
+#include <linux/of_net.h>
 #include <linux/of_platform.h>
 
 #include <asm/uaccess.h>
@@ -594,7 +595,7 @@ static void dump_regs(struct ucc_geth_private *ugeth)
 {
 	int i;
 
-	ugeth_info("UCC%d Geth registers:", ugeth->ug_info->uf_info.ucc_num);
+	ugeth_info("UCC%d Geth registers:", ugeth->ug_info->uf_info.ucc_num + 1);
 	ugeth_info("Base address: 0x%08x", (u32) ugeth->ug_regs);
 
 	ugeth_info("maccfg1    : addr - 0x%08x, val - 0x%08x",
@@ -1999,7 +2000,7 @@ static void ucc_geth_memclean(struct ucc_geth_private *ugeth)
 static void ucc_geth_set_multi(struct net_device *dev)
 {
 	struct ucc_geth_private *ugeth;
-	struct dev_mc_list *dmi;
+	struct netdev_hw_addr *ha;
 	struct ucc_fast __iomem *uf_regs;
 	struct ucc_geth_82xx_address_filtering_pram __iomem *p_82xx_addr_filt;
 
@@ -2028,16 +2029,16 @@ static void ucc_geth_set_multi(struct net_device *dev)
 			out_be32(&p_82xx_addr_filt->gaddr_h, 0x0);
 			out_be32(&p_82xx_addr_filt->gaddr_l, 0x0);
 
-			netdev_for_each_mc_addr(dmi, dev) {
+			netdev_for_each_mc_addr(ha, dev) {
 				/* Only support group multicast for now.
 				 */
-				if (!(dmi->dmi_addr[0] & 1))
+				if (!is_multicast_ether_addr(ha->addr))
 					continue;
 
 				/* Ask CPM to run CRC and set bit in
 				 * filter mask.
 				 */
-				hw_add_addr_in_hash(ugeth, dmi->dmi_addr);
+				hw_add_addr_in_hash(ugeth, ha->addr);
 			}
 		}
 	}
@@ -2050,11 +2051,15 @@ static void ucc_geth_stop(struct ucc_geth_private *ugeth)
 
 	ugeth_vdbg("%s: IN", __func__);
 
+	/*
+	 * Tell the kernel the link is down.
+	 * Must be done before disabling the controller
+	 * or deadlock may happen.
+	 */
+	phy_stop(phydev);
+
 	/* Disable the controller */
 	ugeth_disable(ugeth, COMM_DIR_RX_AND_TX);
-
-	/* Tell the kernel the link is down */
-	phy_stop(phydev);
 
 	/* Mask all interrupts */
 	out_be32(ugeth->uccf->p_uccm, 0x00000000);
@@ -2064,9 +2069,6 @@ static void ucc_geth_stop(struct ucc_geth_private *ugeth)
 
 	/* Disable Rx and Tx */
 	clrbits32(&ug_regs->maccfg1, MACCFG1_ENABLE_RX | MACCFG1_ENABLE_TX);
-
-	phy_disconnect(ugeth->phydev);
-	ugeth->phydev = NULL;
 
 	ucc_geth_memclean(ugeth);
 }
@@ -3148,8 +3150,6 @@ static int ucc_geth_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	/* set bd status and length */
 	out_be32((u32 __iomem *)bd, bd_status);
 
-	dev->trans_start = jiffies;
-
 	/* Move to next BD in the ring */
 	if (!(bd_status & T_W))
 		bd += sizeof(struct qe_bd);
@@ -3217,6 +3217,8 @@ static int ucc_geth_rx(struct ucc_geth_private *ugeth, u8 rxQ, int rx_work_limit
 					   __func__, __LINE__, (u32) skb);
 			if (skb) {
 				skb->data = skb->head + NET_SKB_PAD;
+				skb->len = 0;
+				skb_reset_tail_pointer(skb);
 				__skb_queue_head(&ugeth->rx_recycle, skb);
 			}
 
@@ -3550,7 +3552,10 @@ static int ucc_geth_close(struct net_device *dev)
 
 	napi_disable(&ugeth->napi);
 
+	cancel_work_sync(&ugeth->timeout_work);
 	ucc_geth_stop(ugeth);
+	phy_disconnect(ugeth->phydev);
+	ugeth->phydev = NULL;
 
 	free_irq(ugeth->ug_info->uf_info.irq, ugeth->ndev);
 
@@ -3579,8 +3584,12 @@ static void ucc_geth_timeout_work(struct work_struct *work)
 		 * Must reset MAC *and* PHY. This is done by reopening
 		 * the device.
 		 */
-		ucc_geth_close(dev);
-		ucc_geth_open(dev);
+		netif_tx_stop_all_queues(dev);
+		ucc_geth_stop(ugeth);
+		ucc_geth_init_mac(ugeth);
+		/* Must start PHY here */
+		phy_start(ugeth->phydev);
+		netif_tx_start_all_queues(dev);
 	}
 
 	netif_tx_schedule_all(dev);
@@ -3594,14 +3603,13 @@ static void ucc_geth_timeout(struct net_device *dev)
 {
 	struct ucc_geth_private *ugeth = netdev_priv(dev);
 
-	netif_carrier_off(dev);
 	schedule_work(&ugeth->timeout_work);
 }
 
 
 #ifdef CONFIG_PM
 
-static int ucc_geth_suspend(struct of_device *ofdev, pm_message_t state)
+static int ucc_geth_suspend(struct platform_device *ofdev, pm_message_t state)
 {
 	struct net_device *ndev = dev_get_drvdata(&ofdev->dev);
 	struct ucc_geth_private *ugeth = netdev_priv(ndev);
@@ -3629,7 +3637,7 @@ static int ucc_geth_suspend(struct of_device *ofdev, pm_message_t state)
 	return 0;
 }
 
-static int ucc_geth_resume(struct of_device *ofdev)
+static int ucc_geth_resume(struct platform_device *ofdev)
 {
 	struct net_device *ndev = dev_get_drvdata(&ofdev->dev);
 	struct ucc_geth_private *ugeth = netdev_priv(ndev);
@@ -3704,6 +3712,19 @@ static phy_interface_t to_phy_interface(const char *phy_connection_type)
 	return PHY_INTERFACE_MODE_MII;
 }
 
+static int ucc_geth_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
+{
+	struct ucc_geth_private *ugeth = netdev_priv(dev);
+
+	if (!netif_running(dev))
+		return -EINVAL;
+
+	if (!ugeth->phydev)
+		return -ENODEV;
+
+	return phy_mii_ioctl(ugeth->phydev, rq, cmd);
+}
+
 static const struct net_device_ops ucc_geth_netdev_ops = {
 	.ndo_open		= ucc_geth_open,
 	.ndo_stop		= ucc_geth_close,
@@ -3713,15 +3734,16 @@ static const struct net_device_ops ucc_geth_netdev_ops = {
 	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_set_multicast_list	= ucc_geth_set_multi,
 	.ndo_tx_timeout		= ucc_geth_timeout,
+	.ndo_do_ioctl		= ucc_geth_ioctl,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller	= ucc_netpoll,
 #endif
 };
 
-static int ucc_geth_probe(struct of_device* ofdev, const struct of_device_id *match)
+static int ucc_geth_probe(struct platform_device* ofdev)
 {
 	struct device *device = &ofdev->dev;
-	struct device_node *np = ofdev->node;
+	struct device_node *np = ofdev->dev.of_node;
 	struct net_device *dev = NULL;
 	struct ucc_geth_private *ugeth = NULL;
 	struct ucc_geth_info *ug_info;
@@ -3883,7 +3905,7 @@ static int ucc_geth_probe(struct of_device* ofdev, const struct of_device_id *ma
 	}
 
 	if (netif_msg_probe(&debug))
-		printk(KERN_INFO "ucc_geth: UCC%1d at 0x%8x (irq = %d) \n",
+		printk(KERN_INFO "ucc_geth: UCC%1d at 0x%8x (irq = %d)\n",
 			ug_info->uf_info.ucc_num + 1, ug_info->uf_info.regs,
 			ug_info->uf_info.irq);
 
@@ -3940,7 +3962,7 @@ static int ucc_geth_probe(struct of_device* ofdev, const struct of_device_id *ma
 	return 0;
 }
 
-static int ucc_geth_remove(struct of_device* ofdev)
+static int ucc_geth_remove(struct platform_device* ofdev)
 {
 	struct device *device = &ofdev->dev;
 	struct net_device *dev = dev_get_drvdata(device);
@@ -3964,9 +3986,12 @@ static struct of_device_id ucc_geth_match[] = {
 
 MODULE_DEVICE_TABLE(of, ucc_geth_match);
 
-static struct of_platform_driver ucc_geth_driver = {
-	.name		= DRV_NAME,
-	.match_table	= ucc_geth_match,
+static struct platform_driver ucc_geth_driver = {
+	.driver = {
+		.name = DRV_NAME,
+		.owner = THIS_MODULE,
+		.of_match_table = ucc_geth_match,
+	},
 	.probe		= ucc_geth_probe,
 	.remove		= ucc_geth_remove,
 	.suspend	= ucc_geth_suspend,
@@ -3983,14 +4008,14 @@ static int __init ucc_geth_init(void)
 		memcpy(&(ugeth_info[i]), &ugeth_primary_info,
 		       sizeof(ugeth_primary_info));
 
-	ret = of_register_platform_driver(&ucc_geth_driver);
+	ret = platform_driver_register(&ucc_geth_driver);
 
 	return ret;
 }
 
 static void __exit ucc_geth_exit(void)
 {
-	of_unregister_platform_driver(&ucc_geth_driver);
+	platform_driver_unregister(&ucc_geth_driver);
 }
 
 module_init(ucc_geth_init);

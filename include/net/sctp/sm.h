@@ -345,12 +345,12 @@ enum {
 
 static inline int TSN_lt(__u32 s, __u32 t)
 {
-	return (((s) - (t)) & TSN_SIGN_BIT);
+	return ((s) - (t)) & TSN_SIGN_BIT;
 }
 
 static inline int TSN_lte(__u32 s, __u32 t)
 {
-	return (((s) == (t)) || (((s) - (t)) & TSN_SIGN_BIT));
+	return ((s) == (t)) || (((s) - (t)) & TSN_SIGN_BIT);
 }
 
 /* Compare two SSNs */
@@ -369,12 +369,12 @@ enum {
 
 static inline int SSN_lt(__u16 s, __u16 t)
 {
-	return (((s) - (t)) & SSN_SIGN_BIT);
+	return ((s) - (t)) & SSN_SIGN_BIT;
 }
 
 static inline int SSN_lte(__u16 s, __u16 t)
 {
-	return (((s) == (t)) || (((s) - (t)) & SSN_SIGN_BIT));
+	return ((s) == (t)) || (((s) - (t)) & SSN_SIGN_BIT);
 }
 
 /*
@@ -388,7 +388,7 @@ enum {
 
 static inline int ADDIP_SERIAL_gte(__u16 s, __u16 t)
 {
-	return (((s) == (t)) || (((t) - (s)) & ADDIP_SERIAL_SIGN_BIT));
+	return ((s) == (t)) || (((t) - (s)) & ADDIP_SERIAL_SIGN_BIT);
 }
 
 /* Check VTAG of the packet matches the sender's own tag. */
@@ -438,7 +438,7 @@ sctp_vtag_verify_either(const struct sctp_chunk *chunk,
 	 */
         if ((!sctp_test_T_bit(chunk) &&
              (ntohl(chunk->sctp_hdr->vtag) == asoc->c.my_vtag)) ||
-	    (sctp_test_T_bit(chunk) &&
+	    (sctp_test_T_bit(chunk) && asoc->c.peer_vtag &&
 	     (ntohl(chunk->sctp_hdr->vtag) == asoc->c.peer_vtag))) {
                 return 1;
 	}

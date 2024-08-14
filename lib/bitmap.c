@@ -359,7 +359,6 @@ EXPORT_SYMBOL(bitmap_find_next_zero_area);
 
 #define CHUNKSZ				32
 #define nbits_to_hold_value(val)	fls(val)
-#define unhex(c)			(isdigit(c) ? (c - '0') : (toupper(c) - 'A' + 10))
 #define BASEDEC 10		/* fancier cpuset lists input in decimal */
 
 /**
@@ -466,7 +465,7 @@ int __bitmap_parse(const char *buf, unsigned int buflen,
 			if (chunk & ~((1UL << (CHUNKSZ - 4)) - 1))
 				return -EOVERFLOW;
 
-			chunk = (chunk << 4) | unhex(c);
+			chunk = (chunk << 4) | hex_to_bin(c);
 			ndigits++; totaldigits++;
 		}
 		if (ndigits == 0)
@@ -831,7 +830,7 @@ EXPORT_SYMBOL(bitmap_bitremap);
  *  @orig (i.e. bits 3, 5, 7 and 9) were also set.
  *
  *  When bit 11 is set in @orig, it means turn on the bit in
- *  @dst corresponding to whatever is the twelth bit that is
+ *  @dst corresponding to whatever is the twelfth bit that is
  *  turned on in @relmap.  In the above example, there were
  *  only ten bits turned on in @relmap (30..39), so that bit
  *  11 was set in @orig had no affect on @dst.

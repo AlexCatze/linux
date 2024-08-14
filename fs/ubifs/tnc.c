@@ -447,8 +447,11 @@ static int tnc_read_node_nm(struct ubifs_info *c, struct ubifs_zbranch *zbr,
  *
  * Note, this function does not check CRC of data nodes if @c->no_chk_data_crc
  * is true (it is controlled by corresponding mount option). However, if
- * @c->always_chk_crc is true, @c->no_chk_data_crc is ignored and CRC is always
- * checked.
+ * @c->mounting or @c->remounting_rw is true (we are mounting or re-mounting to
+ * R/W mode), @c->no_chk_data_crc is ignored and CRC is checked. This is
+ * because during mounting or re-mounting from R/O mode to R/W mode we may read
+ * journal nodes (when replying the journal or doing the recovery) and the
+ * journal nodes may potentially be corrupted, so checking is required.
  */
 static int try_read_node(const struct ubifs_info *c, void *buf, int type,
 			 int len, int lnum, int offs)
@@ -476,7 +479,8 @@ static int try_read_node(const struct ubifs_info *c, void *buf, int type,
 	if (node_len != len)
 		return 0;
 
-	if (type == UBIFS_DATA_NODE && !c->always_chk_crc && c->no_chk_data_crc)
+	if (type == UBIFS_DATA_NODE && c->no_chk_data_crc && !c->mounting &&
+	    !c->remounting_rw)
 		return 1;
 
 	crc = crc32(UBIFS_CRC32_INIT, buf + 8, node_len - 8);
@@ -1177,6 +1181,7 @@ int ubifs_lookup_level0(struct ubifs_info *c, const union ubifs_key *key,
 	unsigned long time = get_seconds();
 
 	dbg_tnc("search key %s", DBGKEY(key));
+	ubifs_assert(key_type(c, key) < UBIFS_INVALID_KEY);
 
 	znode = c->zroot.znode;
 	if (unlikely(!znode)) {
@@ -2966,7 +2971,7 @@ static struct ubifs_znode *right_znode(struct ubifs_info *c,
  *
  * This function searches an indexing node by its first key @key and its
  * address @lnum:@offs. It looks up the indexing tree by pulling all indexing
- * nodes it traverses to TNC. This function is called fro indexing nodes which
+ * nodes it traverses to TNC. This function is called for indexing nodes which
  * were found on the media by scanning, for example when garbage-collecting or
  * when doing in-the-gaps commit. This means that the indexing node which is
  * looked for does not have to have exactly the same leftmost key @key, because
@@ -2987,6 +2992,8 @@ static struct ubifs_znode *lookup_znode(struct ubifs_info *c,
 {
 	struct ubifs_znode *znode, *zn;
 	int n, nn;
+
+	ubifs_assert(key_type(c, key) < UBIFS_INVALID_KEY);
 
 	/*
 	 * The arguments have probably been read off flash, so don't assume

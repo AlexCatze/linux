@@ -15,30 +15,14 @@ int ip6_route_me_harder(struct sk_buff *skb)
 	struct net *net = dev_net(skb_dst(skb)->dev);
 	struct ipv6hdr *iph = ipv6_hdr(skb);
 	struct dst_entry *dst;
-	struct flowi fl = {
-		.oif = skb->sk ? skb->sk->sk_bound_dev_if : 0,
-		.mark = skb->mark,
-		.nl_u =
-		{ .ip6_u =
-		  { .daddr = iph->daddr,
-		    .saddr = iph->saddr, } },
+	struct flowi6 fl6 = {
+		.flowi6_oif = skb->sk ? skb->sk->sk_bound_dev_if : 0,
+		.flowi6_mark = skb->mark,
+		.daddr = iph->daddr,
+		.saddr = iph->saddr,
 	};
 
-	dst = ip6_route_output(net, skb->sk, &fl);
-
-#ifdef CONFIG_XFRM
-	if (!(IP6CB(skb)->flags & IP6SKB_XFRM_TRANSFORMED) &&
-	    xfrm_decode_session(skb, &fl, AF_INET6) == 0) {
-		struct dst_entry *dst2 = skb_dst(skb);
-
-		if (xfrm_lookup(net, &dst2, &fl, skb->sk, 0)) {
-			skb_dst_set(skb, NULL);
-			return -1;
-		}
-		skb_dst_set(skb, dst2);
-	}
-#endif
-
+	dst = ip6_route_output(net, skb->sk, &fl6);
 	if (dst->error) {
 		IP6_INC_STATS(net, ip6_dst_idev(dst), IPSTATS_MIB_OUTNOROUTES);
 		LIMIT_NETDEBUG(KERN_DEBUG "ip6_route_me_harder: No more route.\n");
@@ -50,6 +34,18 @@ int ip6_route_me_harder(struct sk_buff *skb)
 	skb_dst_drop(skb);
 
 	skb_dst_set(skb, dst);
+
+#ifdef CONFIG_XFRM
+	if (!(IP6CB(skb)->flags & IP6SKB_XFRM_TRANSFORMED) &&
+	    xfrm_decode_session(skb, flowi6_to_flowi(&fl6), AF_INET6) == 0) {
+		skb_dst_set(skb, NULL);
+		dst = xfrm_lookup(net, dst, flowi6_to_flowi(&fl6), skb->sk, 0);
+		if (IS_ERR(dst))
+			return -1;
+		skb_dst_set(skb, dst);
+	}
+#endif
+
 	return 0;
 }
 EXPORT_SYMBOL(ip6_route_me_harder);
@@ -94,9 +90,18 @@ static int nf_ip6_reroute(struct sk_buff *skb,
 	return 0;
 }
 
-static int nf_ip6_route(struct dst_entry **dst, struct flowi *fl)
+static int nf_ip6_route(struct net *net, struct dst_entry **dst,
+			struct flowi *fl, bool strict)
 {
-	*dst = ip6_route_output(&init_net, NULL, fl);
+	static const struct ipv6_pinfo fake_pinfo;
+	static const struct inet_sock fake_sk = {
+		/* makes ip6_route_output set RT6_LOOKUP_F_IFACE: */
+		.sk.sk_bound_dev_if = 1,
+		.pinet6 = (struct ipv6_pinfo *) &fake_pinfo,
+	};
+	const void *sk = strict ? &fake_sk : NULL;
+
+	*dst = ip6_route_output(net, sk, &fl->u.ip6);
 	return (*dst)->error;
 }
 
@@ -154,9 +159,7 @@ static __sum16 nf_ip6_checksum_partial(struct sk_buff *skb, unsigned int hook,
 							 protocol,
 							 csum_sub(0, hsum)));
 		skb->ip_summed = CHECKSUM_NONE;
-		csum = __skb_checksum_complete_head(skb, dataoff + len);
-		if (!csum)
-			skb->ip_summed = CHECKSUM_UNNECESSARY;
+		return __skb_checksum_complete_head(skb, dataoff + len);
 	}
 	return csum;
 };

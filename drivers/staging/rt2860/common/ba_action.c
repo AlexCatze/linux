@@ -26,8 +26,9 @@
  */
 
 #include "../rt_config.h"
+#include <linux/kernel.h>
 
-#define BA_ORI_INIT_SEQ		(pEntry->TxSeq[TID])	/*1                        // inital sequence number of BA session */
+#define BA_ORI_INIT_SEQ		(pEntry->TxSeq[TID])	/*1                        // initial sequence number of BA session */
 
 #define ORI_SESSION_MAX_RETRY	8
 #define ORI_BA_SESSION_TIMEOUT	(2000)	/* ms */
@@ -106,7 +107,7 @@ void Announce_Reordering_Packet(struct rt_rtmp_adapter *pAd,
 
 	if (mpdu->bAMSDU) {
 		ASSERT(0);
-		BA_Reorder_AMSDU_Annnounce(pAd, pPacket);
+		BA_Reorder_AMSDU_Announce(pAd, pPacket);
 	} else {
 		/* */
 		/* pass this 802.3 packet to upper layer or forward this packet to WM directly */
@@ -654,8 +655,8 @@ BOOLEAN BARecSessionAdd(struct rt_rtmp_adapter *pAd,
 	} else {
 		Status = FALSE;
 		DBGPRINT(RT_DEBUG_TRACE,
-			 ("Can't Accept ADDBA for %02x:%02x:%02x:%02x:%02x:%02x TID = %d\n",
-			  PRINT_MAC(pEntry->Addr), TID));
+			("Can't Accept ADDBA for %pM TID = %d\n",
+				pEntry->Addr, TID));
 	}
 	return (Status);
 }
@@ -798,8 +799,8 @@ void BAOriSessionTearDown(struct rt_rtmp_adapter *pAd,
 			/* force send specified TID DelBA */
 			struct rt_mlme_delba_req DelbaReq;
 			struct rt_mlme_queue_elem *Elem =
-			    (struct rt_mlme_queue_elem *)kmalloc(sizeof(struct rt_mlme_queue_elem),
-							MEM_ALLOC_FLAG);
+				kmalloc(sizeof(struct rt_mlme_queue_elem),
+					MEM_ALLOC_FLAG);
 			if (Elem != NULL) {
 				NdisZeroMemory(&DelbaReq, sizeof(DelbaReq));
 				NdisZeroMemory(Elem, sizeof(struct rt_mlme_queue_elem));
@@ -838,8 +839,8 @@ void BAOriSessionTearDown(struct rt_rtmp_adapter *pAd,
 	    && (pBAEntry->ORI_BA_Status == Originator_Done)) {
 		struct rt_mlme_delba_req DelbaReq;
 		struct rt_mlme_queue_elem *Elem =
-		    (struct rt_mlme_queue_elem *)kmalloc(sizeof(struct rt_mlme_queue_elem),
-						MEM_ALLOC_FLAG);
+			kmalloc(sizeof(struct rt_mlme_queue_elem),
+				MEM_ALLOC_FLAG);
 		if (Elem != NULL) {
 			NdisZeroMemory(&DelbaReq, sizeof(DelbaReq));
 			NdisZeroMemory(Elem, sizeof(struct rt_mlme_queue_elem));
@@ -907,8 +908,8 @@ void BARecSessionTearDown(struct rt_rtmp_adapter *pAd,
 		/* */
 		if (bPassive == FALSE) {
 			struct rt_mlme_queue_elem *Elem =
-			    (struct rt_mlme_queue_elem *)kmalloc(sizeof(struct rt_mlme_queue_elem),
-							MEM_ALLOC_FLAG);
+				kmalloc(sizeof(struct rt_mlme_queue_elem),
+					MEM_ALLOC_FLAG);
 			if (Elem != NULL) {
 				NdisZeroMemory(&DelbaReq, sizeof(DelbaReq));
 				NdisZeroMemory(Elem, sizeof(struct rt_mlme_queue_elem));
@@ -1269,13 +1270,13 @@ BOOLEAN CntlEnqueueForRecv(struct rt_rtmp_adapter *pAd,
 
 	/* First check the size, it MUST not exceed the mlme queue size */
 	if (MsgLen > MGMT_DMA_BUFFER_SIZE) {
-		DBGPRINT_ERR(("CntlEnqueueForRecv: frame too large, size = %ld \n", MsgLen));
+		DBGPRINT_ERR("CntlEnqueueForRecv: frame too large, size = %ld \n", MsgLen);
 		return FALSE;
 	} else if (MsgLen != sizeof(struct rt_frame_ba_req)) {
-		DBGPRINT_ERR(("CntlEnqueueForRecv: BlockAck Request frame length size = %ld incorrect\n", MsgLen));
+		DBGPRINT_ERR("CntlEnqueueForRecv: BlockAck Request frame length size = %ld incorrect\n", MsgLen);
 		return FALSE;
 	} else if (MsgLen != sizeof(struct rt_frame_ba_req)) {
-		DBGPRINT_ERR(("CntlEnqueueForRecv: BlockAck Request frame length size = %ld incorrect\n", MsgLen));
+		DBGPRINT_ERR("CntlEnqueueForRecv: BlockAck Request frame length size = %ld incorrect\n", MsgLen);
 		return FALSE;
 	}
 
@@ -1486,7 +1487,7 @@ static void ba_enqueue_reordering_packet(struct rt_rtmp_adapter *pAd,
 
 		/*
 		 * flush all pending reordering mpdus
-		 * and receving mpdu to upper layer
+		 * and receiving mpdu to upper layer
 		 * make tcp/ip to take care reordering mechanism
 		 */
 		/*ba_refresh_reordering_mpdus(pAd, pBAEntry); */

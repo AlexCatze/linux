@@ -78,7 +78,7 @@ that almost all frames will need to be copied to an alignment buffer.
 
 IVb. References
 
-http://www.realtek.com.tw/cn/cn.html
+http://www.realtek.com.tw/
 http://www.scyld.com/expert/NWay.html
 
 IVc. Errata
@@ -214,7 +214,7 @@ static struct {
 	{ "SMC1211TX EZCard 10/100 (RealTek RTL8139)" },
 /*	{ MPX5030, "Accton MPX5030 (RealTek RTL8139)" },*/
 	{ "Delta Electronics 8139 10/100BaseTX" },
-	{ "Addtron Technolgy 8139 10/100BaseTX" },
+	{ "Addtron Technology 8139 10/100BaseTX" },
 };
 
 
@@ -1125,7 +1125,7 @@ static int netdrv_open(struct net_device *dev)
 	init_timer(&tp->timer);
 	tp->timer.expires = jiffies + 3 * HZ;
 	tp->timer.data = (unsigned long) dev;
-	tp->timer.function = &netdrv_timer;
+	tp->timer.function = netdrv_timer;
 	add_timer(&tp->timer);
 
 	DPRINTK("EXIT, returning 0\n");
@@ -1354,7 +1354,6 @@ static int netdrv_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	NETDRV_W32(TxStatus0 + (entry * sizeof(u32)),
 		   tp->tx_flag | (skb->len >= ETH_ZLEN ? skb->len : ETH_ZLEN));
 
-	dev->trans_start = jiffies;
 	atomic_inc(&tp->cur_tx);
 	if ((atomic_read(&tp->cur_tx) - atomic_read(&tp->dirty_tx)) >= NUM_TX_DESC)
 		netif_stop_queue(dev);
@@ -1813,12 +1812,12 @@ static void netdrv_set_rx_mode(struct net_device *dev)
 		rx_mode = AcceptBroadcast | AcceptMulticast | AcceptMyPhys;
 		mc_filter[1] = mc_filter[0] = 0xffffffff;
 	} else {
-		struct dev_mc_list *mclist;
+		struct netdev_hw_addr *ha;
 
 		rx_mode = AcceptBroadcast | AcceptMulticast | AcceptMyPhys;
 		mc_filter[1] = mc_filter[0] = 0;
-		netdev_for_each_mc_addr(mclist, dev) {
-			int bit_nr = ether_crc(ETH_ALEN, mclist->dmi_addr) >> 26;
+		netdev_for_each_mc_addr(ha, dev) {
+			int bit_nr = ether_crc(ETH_ALEN, ha->addr) >> 26;
 
 			mc_filter[bit_nr >> 5] |= 1 << (bit_nr & 31);
 		}

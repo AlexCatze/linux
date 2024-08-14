@@ -14,10 +14,11 @@
  * GNU General Public License for more details.
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/version.h>
 #include <linux/ioport.h>
 #include <linux/pci.h>
 #include <linux/proc_fs.h>
@@ -1456,7 +1457,6 @@ struct dev_info {
  * @adapter:		Adapter device information.
  * @port:		Port information.
  * @monitor_time_info:	Timer to monitor ports.
- * @stats:		Network statistics.
  * @proc_sem:		Semaphore for proc accessing.
  * @id:			Device ID.
  * @mii_if:		MII interface information.
@@ -1470,7 +1470,6 @@ struct dev_priv {
 	struct dev_info *adapter;
 	struct ksz_port port;
 	struct ksz_timer_info monitor_timer_info;
-	struct net_device_stats stats;
 
 	struct semaphore proc_sem;
 	int id;
@@ -1483,11 +1482,6 @@ struct dev_priv {
 	int multicast;
 	int promiscuous;
 };
-
-#define ks_info(_ks, _msg...) dev_info(&(_ks)->pdev->dev, _msg)
-#define ks_warn(_ks, _msg...) dev_warn(&(_ks)->pdev->dev, _msg)
-#define ks_dbg(_ks, _msg...) dev_dbg(&(_ks)->pdev->dev, _msg)
-#define ks_err(_ks, _msg...) dev_err(&(_ks)->pdev->dev, _msg)
 
 #define DRV_NAME		"KSZ884X PCI"
 #define DEVICE_NAME		"KSZ884x PCI"
@@ -3576,7 +3570,7 @@ static void hw_cfg_wol(struct ksz_hw *hw, u16 frame, int set)
  * This routine is used to program Wake-on-LAN pattern.
  */
 static void hw_set_wol_frame(struct ksz_hw *hw, int i, uint mask_size,
-	u8 *mask, uint frame_size, u8 *pattern)
+	const u8 *mask, uint frame_size, const u8 *pattern)
 {
 	int bits;
 	int from;
@@ -3632,9 +3626,9 @@ static void hw_set_wol_frame(struct ksz_hw *hw, int i, uint mask_size,
  *
  * This routine is used to add ARP pattern for waking up the host.
  */
-static void hw_add_wol_arp(struct ksz_hw *hw, u8 *ip_addr)
+static void hw_add_wol_arp(struct ksz_hw *hw, const u8 *ip_addr)
 {
-	u8 mask[6] = { 0x3F, 0xF0, 0x3F, 0x00, 0xC0, 0x03 };
+	static const u8 mask[6] = { 0x3F, 0xF0, 0x3F, 0x00, 0xC0, 0x03 };
 	u8 pattern[42] = {
 		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -3657,8 +3651,8 @@ static void hw_add_wol_arp(struct ksz_hw *hw, u8 *ip_addr)
  */
 static void hw_add_wol_bcast(struct ksz_hw *hw)
 {
-	u8 mask[] = { 0x3F };
-	u8 pattern[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+	static const u8 mask[] = { 0x3F };
+	static const u8 pattern[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
 	hw_set_wol_frame(hw, 2, 1, mask, MAC_ADDR_LEN, pattern);
 }
@@ -3675,7 +3669,7 @@ static void hw_add_wol_bcast(struct ksz_hw *hw)
  */
 static void hw_add_wol_mcast(struct ksz_hw *hw)
 {
-	u8 mask[] = { 0x3F };
+	static const u8 mask[] = { 0x3F };
 	u8 pattern[] = { 0x33, 0x33, 0xFF, 0x00, 0x00, 0x00 };
 
 	memcpy(&pattern[3], &hw->override_addr[3], 3);
@@ -3693,7 +3687,7 @@ static void hw_add_wol_mcast(struct ksz_hw *hw)
  */
 static void hw_add_wol_ucast(struct ksz_hw *hw)
 {
-	u8 mask[] = { 0x3F };
+	static const u8 mask[] = { 0x3F };
 
 	hw_set_wol_frame(hw, 0, 1, mask, MAC_ADDR_LEN, hw->override_addr);
 }
@@ -3706,7 +3700,7 @@ static void hw_add_wol_ucast(struct ksz_hw *hw)
  *
  * This routine is used to enable Wake-on-LAN depending on driver settings.
  */
-static void hw_enable_wol(struct ksz_hw *hw, u32 wol_enable, u8 *net_addr)
+static void hw_enable_wol(struct ksz_hw *hw, u32 wol_enable, const u8 *net_addr)
 {
 	hw_cfg_wol(hw, KS8841_WOL_MAGIC_ENABLE, (wol_enable & WAKE_MAGIC));
 	hw_cfg_wol(hw, KS8841_WOL_FRAME0_ENABLE, (wol_enable & WAKE_UCAST));
@@ -3835,7 +3829,7 @@ static void ksz_check_desc_num(struct ksz_desc_info *info)
 		alloc >>= 1;
 	}
 	if (alloc != 1 || shift < MIN_DESC_SHIFT) {
-		printk(KERN_ALERT "Hardware descriptor numbers not right!\n");
+		pr_alert("Hardware descriptor numbers not right!\n");
 		while (alloc) {
 			shift++;
 			alloc >>= 1;
@@ -4546,8 +4540,7 @@ static int ksz_alloc_mem(struct dev_info *adapter)
 		(((sizeof(struct ksz_hw_desc) + DESC_ALIGNMENT - 1) /
 		DESC_ALIGNMENT) * DESC_ALIGNMENT);
 	if (hw->rx_desc_info.size != sizeof(struct ksz_hw_desc))
-		printk(KERN_ALERT
-			"Hardware descriptor size not right!\n");
+		pr_alert("Hardware descriptor size not right!\n");
 	ksz_check_desc_num(&hw->rx_desc_info);
 	ksz_check_desc_num(&hw->tx_desc_info);
 
@@ -4689,7 +4682,7 @@ static void send_packet(struct sk_buff *skb, struct net_device *dev)
 		int frag;
 		skb_frag_t *this_frag;
 
-		dma_buf->len = skb->len - skb->data_len;
+		dma_buf->len = skb_headlen(skb);
 
 		dma_buf->dma = pci_map_single(
 			hw_priv->pdev, skb->data, dma_buf->len,
@@ -4756,8 +4749,8 @@ static void send_packet(struct sk_buff *skb, struct net_device *dev)
 	hw_send_pkt(hw);
 
 	/* Update transmit statistics. */
-	priv->stats.tx_packets++;
-	priv->stats.tx_bytes += len;
+	dev->stats.tx_packets++;
+	dev->stats.tx_bytes += len;
 }
 
 /**
@@ -4859,7 +4852,7 @@ static inline void copy_old_skb(struct sk_buff *old, struct sk_buff *skb)
  *
  * Return 0 if successful; otherwise an error code indicating failure.
  */
-static int netdev_tx(struct sk_buff *skb, struct net_device *dev)
+static netdev_tx_t netdev_tx(struct sk_buff *skb, struct net_device *dev)
 {
 	struct dev_priv *priv = netdev_priv(dev);
 	struct dev_info *hw_priv = priv->adapter;
@@ -4905,7 +4898,7 @@ static int netdev_tx(struct sk_buff *skb, struct net_device *dev)
 				goto unlock;
 			}
 			skb_copy_and_csum_dev(org_skb, skb->data);
-			org_skb->ip_summed = 0;
+			org_skb->ip_summed = CHECKSUM_NONE;
 			skb->len = org_skb->len;
 			copy_old_skb(org_skb, skb);
 		}
@@ -5035,7 +5028,7 @@ static inline int rx_proc(struct net_device *dev, struct ksz_hw* hw,
 		/* skb->data != skb->head */
 		skb = dev_alloc_skb(packet_len + 2);
 		if (!skb) {
-			priv->stats.rx_dropped++;
+			dev->stats.rx_dropped++;
 			return -ENOMEM;
 		}
 
@@ -5049,20 +5042,16 @@ static inline int rx_proc(struct net_device *dev, struct ksz_hw* hw,
 			dma_buf->skb->data, packet_len);
 	} while (0);
 
-	skb->dev = dev;
-
 	skb->protocol = eth_type_trans(skb, dev);
 
 	if (hw->rx_cfg & (DMA_RX_CSUM_UDP | DMA_RX_CSUM_TCP))
 		csum_verified(skb);
 
 	/* Update receive statistics. */
-	priv->stats.rx_packets++;
-	priv->stats.rx_bytes += packet_len;
+	dev->stats.rx_packets++;
+	dev->stats.rx_bytes += packet_len;
 
 	/* Notify upper layer for received packet. */
-	dev->last_rx = jiffies;
-
 	rx_status = netif_rx(skb);
 
 	return 0;
@@ -5300,7 +5289,7 @@ static irqreturn_t netdev_intr(int irq, void *dev_id)
 		}
 
 		if (unlikely(int_enable & KS884X_INT_RX_OVERRUN)) {
-			priv->stats.rx_fifo_errors++;
+			dev->stats.rx_fifo_errors++;
 			hw_resume_rx(hw);
 		}
 
@@ -5320,10 +5309,10 @@ static irqreturn_t netdev_intr(int irq, void *dev_id)
 			u32 data;
 
 			hw->intr_mask &= ~KS884X_INT_TX_STOPPED;
-			printk(KERN_INFO "Tx stopped\n");
+			pr_info("Tx stopped\n");
 			data = readl(hw->io + KS_DMA_TX_CTRL);
 			if (!(data & DMA_TX_ENABLE))
-				printk(KERN_INFO "Tx disabled\n");
+				pr_info("Tx disabled\n");
 			break;
 		}
 	} while (0);
@@ -5496,6 +5485,18 @@ static int prepare_hardware(struct net_device *dev)
 	return 0;
 }
 
+static void set_media_state(struct net_device *dev, int media_state)
+{
+	struct dev_priv *priv = netdev_priv(dev);
+
+	if (media_state == priv->media_state)
+		netif_carrier_on(dev);
+	else
+		netif_carrier_off(dev);
+	netif_info(priv, link, dev, "link %s\n",
+		   media_state == priv->media_state ? "on" : "off");
+}
+
 /**
  * netdev_open - open network device
  * @dev:	Network device.
@@ -5519,7 +5520,7 @@ static int netdev_open(struct net_device *dev)
 	priv->promiscuous = 0;
 
 	/* Reset device statistics. */
-	memset(&priv->stats, 0, sizeof(struct net_device_stats));
+	memset(&dev->stats, 0, sizeof(struct net_device_stats));
 	memset((void *) port->counter, 0,
 		(sizeof(u64) * OID_COUNTER_LAST));
 
@@ -5585,15 +5586,7 @@ static int netdev_open(struct net_device *dev)
 
 	priv->media_state = port->linked->state;
 
-	if (media_connected == priv->media_state)
-		netif_carrier_on(dev);
-	else
-		netif_carrier_off(dev);
-	if (netif_msg_link(priv))
-		printk(KERN_INFO "%s link %s\n", dev->name,
-			(media_connected == priv->media_state ?
-			"on" : "off"));
-
+	set_media_state(dev, media_connected);
 	netif_start_queue(dev);
 
 	return 0;
@@ -5627,42 +5620,42 @@ static struct net_device_stats *netdev_query_statistics(struct net_device *dev)
 	int i;
 	int p;
 
-	priv->stats.rx_errors = port->counter[OID_COUNTER_RCV_ERROR];
-	priv->stats.tx_errors = port->counter[OID_COUNTER_XMIT_ERROR];
+	dev->stats.rx_errors = port->counter[OID_COUNTER_RCV_ERROR];
+	dev->stats.tx_errors = port->counter[OID_COUNTER_XMIT_ERROR];
 
 	/* Reset to zero to add count later. */
-	priv->stats.multicast = 0;
-	priv->stats.collisions = 0;
-	priv->stats.rx_length_errors = 0;
-	priv->stats.rx_crc_errors = 0;
-	priv->stats.rx_frame_errors = 0;
-	priv->stats.tx_window_errors = 0;
+	dev->stats.multicast = 0;
+	dev->stats.collisions = 0;
+	dev->stats.rx_length_errors = 0;
+	dev->stats.rx_crc_errors = 0;
+	dev->stats.rx_frame_errors = 0;
+	dev->stats.tx_window_errors = 0;
 
 	for (i = 0, p = port->first_port; i < port->mib_port_cnt; i++, p++) {
 		mib = &hw->port_mib[p];
 
-		priv->stats.multicast += (unsigned long)
+		dev->stats.multicast += (unsigned long)
 			mib->counter[MIB_COUNTER_RX_MULTICAST];
 
-		priv->stats.collisions += (unsigned long)
+		dev->stats.collisions += (unsigned long)
 			mib->counter[MIB_COUNTER_TX_TOTAL_COLLISION];
 
-		priv->stats.rx_length_errors += (unsigned long)(
+		dev->stats.rx_length_errors += (unsigned long)(
 			mib->counter[MIB_COUNTER_RX_UNDERSIZE] +
 			mib->counter[MIB_COUNTER_RX_FRAGMENT] +
 			mib->counter[MIB_COUNTER_RX_OVERSIZE] +
 			mib->counter[MIB_COUNTER_RX_JABBER]);
-		priv->stats.rx_crc_errors += (unsigned long)
+		dev->stats.rx_crc_errors += (unsigned long)
 			mib->counter[MIB_COUNTER_RX_CRC_ERR];
-		priv->stats.rx_frame_errors += (unsigned long)(
+		dev->stats.rx_frame_errors += (unsigned long)(
 			mib->counter[MIB_COUNTER_RX_ALIGNMENT_ERR] +
 			mib->counter[MIB_COUNTER_RX_SYMBOL_ERR]);
 
-		priv->stats.tx_window_errors += (unsigned long)
+		dev->stats.tx_window_errors += (unsigned long)
 			mib->counter[MIB_COUNTER_TX_LATE_COLLISION];
 	}
 
-	return &priv->stats;
+	return &dev->stats;
 }
 
 /**
@@ -5723,7 +5716,7 @@ static void dev_set_promiscuous(struct net_device *dev, struct dev_priv *priv,
 		 * from the bridge.
 		 */
 		if ((hw->features & STP_SUPPORT) && !promiscuous &&
-				dev->br_port) {
+		    (dev->priv_flags & IFF_BRIDGE_PORT)) {
 			struct ksz_switch *sw = hw->ksz_switch;
 			int port = priv->port.first_port;
 
@@ -5767,7 +5760,7 @@ static void netdev_set_rx_mode(struct net_device *dev)
 	struct dev_priv *priv = netdev_priv(dev);
 	struct dev_info *hw_priv = priv->adapter;
 	struct ksz_hw *hw = &hw_priv->hw;
-	struct dev_mc_list *mc_ptr;
+	struct netdev_hw_addr *ha;
 	int multicast = (dev->flags & IFF_ALLMULTI);
 
 	dev_set_promiscuous(dev, priv, hw, (dev->flags & IFF_PROMISC));
@@ -5784,7 +5777,7 @@ static void netdev_set_rx_mode(struct net_device *dev)
 		int i = 0;
 
 		/* List too big to support so turn on all multicast mode. */
-		if (dev->mc_count > MAX_MULTICAST_LIST) {
+		if (netdev_mc_count(dev) > MAX_MULTICAST_LIST) {
 			if (MAX_MULTICAST_LIST != hw->multi_list_size) {
 				hw->multi_list_size = MAX_MULTICAST_LIST;
 				++hw->all_multi;
@@ -5793,13 +5786,12 @@ static void netdev_set_rx_mode(struct net_device *dev)
 			return;
 		}
 
-		netdev_for_each_mc_addr(mc_ptr, dev) {
-			if (!(*mc_ptr->dmi_addr & 1))
+		netdev_for_each_mc_addr(ha, dev) {
+			if (!(*ha->addr & 1))
 				continue;
 			if (i >= MAX_MULTICAST_LIST)
 				break;
-			memcpy(hw->multi_list[i++], mc_ptr->dmi_addr,
-				MAC_ADDR_LEN);
+			memcpy(hw->multi_list[i++], ha->addr, MAC_ADDR_LEN);
 		}
 		hw->multi_list_size = (u8) i;
 		hw_set_grp_addr(hw);
@@ -6216,7 +6208,7 @@ static int netdev_set_wol(struct net_device *dev,
 	struct dev_info *hw_priv = priv->adapter;
 
 	/* Need to find a way to retrieve the device IP address. */
-	u8 net_addr[] = { 192, 168, 1, 1 };
+	static const u8 net_addr[] = { 192, 168, 1, 1 };
 
 	if (wol->wolopts & ~hw_priv->wol_support)
 		return -EINVAL;
@@ -6683,16 +6675,8 @@ static void update_link(struct net_device *dev, struct dev_priv *priv,
 {
 	if (priv->media_state != port->linked->state) {
 		priv->media_state = port->linked->state;
-		if (netif_running(dev)) {
-			if (media_connected == priv->media_state)
-				netif_carrier_on(dev);
-			else
-				netif_carrier_off(dev);
-			if (netif_msg_link(priv))
-				printk(KERN_INFO "%s link %s\n", dev->name,
-					(media_connected == priv->media_state ?
-					"on" : "off"));
-		}
+		if (netif_running(dev))
+			set_media_state(dev, media_connected);
 	}
 }
 
@@ -6826,7 +6810,7 @@ static int stp;
 static int fast_aging;
 
 /**
- * netdev_init - initalize network device.
+ * netdev_init - initialize network device.
  * @dev:	Network device.
  *
  * This function initializes the network device.
@@ -6877,6 +6861,7 @@ static const struct net_device_ops netdev_ops = {
 	.ndo_tx_timeout		= netdev_tx_timeout,
 	.ndo_change_mtu		= netdev_change_mtu,
 	.ndo_set_mac_address	= netdev_set_mac_address,
+	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_do_ioctl		= netdev_ioctl,
 	.ndo_set_rx_mode	= netdev_set_rx_mode,
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -6909,13 +6894,12 @@ static void get_mac_addr(struct dev_info *hw_priv, u8 *macaddr, int port)
 	i = j = num = got_num = 0;
 	while (j < MAC_ADDR_LEN) {
 		if (macaddr[i]) {
+			int digit;
+
 			got_num = 1;
-			if ('0' <= macaddr[i] && macaddr[i] <= '9')
-				num = num * 16 + macaddr[i] - '0';
-			else if ('A' <= macaddr[i] && macaddr[i] <= 'F')
-				num = num * 16 + 10 + macaddr[i] - 'A';
-			else if ('a' <= macaddr[i] && macaddr[i] <= 'f')
-				num = num * 16 + 10 + macaddr[i] - 'a';
+			digit = hex_to_bin(macaddr[i]);
+			if (digit >= 0)
+				num = num * 16 + digit;
 			else if (':' == macaddr[i])
 				got_num = 2;
 			else
@@ -6969,7 +6953,7 @@ static void read_other_addr(struct ksz_hw *hw)
 #define PCI_VENDOR_ID_MICREL_KS		0x16c6
 #endif
 
-static int __init pcidev_init(struct pci_dev *pdev,
+static int __devinit pcidev_init(struct pci_dev *pdev,
 	const struct pci_device_id *id)
 {
 	struct net_device *dev;
@@ -6986,7 +6970,7 @@ static int __init pcidev_init(struct pci_dev *pdev,
 	int pi;
 	int port_count;
 	int result;
-	char banner[80];
+	char banner[sizeof(version)];
 	struct ksz_switch *sw = NULL;
 
 	result = pci_enable_device(pdev);
@@ -7010,10 +6994,9 @@ static int __init pcidev_init(struct pci_dev *pdev,
 
 	result = -ENOMEM;
 
-	info = kmalloc(sizeof(struct platform_info), GFP_KERNEL);
+	info = kzalloc(sizeof(struct platform_info), GFP_KERNEL);
 	if (!info)
 		goto pcidev_init_dev_err;
-	memset(info, 0, sizeof(struct platform_info));
 
 	hw_priv = &info->dev_info;
 	hw_priv->pdev = pdev;
@@ -7027,15 +7010,15 @@ static int __init pcidev_init(struct pci_dev *pdev,
 	cnt = hw_init(hw);
 	if (!cnt) {
 		if (msg_enable & NETIF_MSG_PROBE)
-			printk(KERN_ALERT "chip not detected\n");
+			pr_alert("chip not detected\n");
 		result = -ENODEV;
 		goto pcidev_init_alloc_err;
 	}
 
-	sprintf(banner,	"%s\n", version);
-	banner[13] = cnt + '0';
-	ks_info(hw_priv, "%s", banner);
-	ks_dbg(hw_priv, "Mem = %p; IRQ = %d\n", hw->io, pdev->irq);
+	snprintf(banner, sizeof(banner), "%s", version);
+	banner[13] = cnt + '0';		/* Replace x in "Micrel KSZ884x" */
+	dev_info(&hw_priv->pdev->dev, "%s\n", banner);
+	dev_dbg(&hw_priv->pdev->dev, "Mem = %p; IRQ = %d\n", hw->io, pdev->irq);
 
 	/* Assume device is KSZ8841. */
 	hw->dev_count = 1;
@@ -7064,10 +7047,9 @@ static int __init pcidev_init(struct pci_dev *pdev,
 			mib_port_count = SWITCH_PORT_NUM;
 		}
 		hw->mib_port_cnt = TOTAL_PORT_NUM;
-		hw->ksz_switch = kmalloc(sizeof(struct ksz_switch), GFP_KERNEL);
+		hw->ksz_switch = kzalloc(sizeof(struct ksz_switch), GFP_KERNEL);
 		if (!hw->ksz_switch)
 			goto pcidev_init_alloc_err;
-		memset(hw->ksz_switch, 0, sizeof(struct ksz_switch));
 
 		sw = hw->ksz_switch;
 	}
@@ -7259,7 +7241,7 @@ static int pcidev_suspend(struct pci_dev *pdev, pm_message_t state)
 	struct ksz_hw *hw = &hw_priv->hw;
 
 	/* Need to find a way to retrieve the device IP address. */
-	u8 net_addr[] = { 192, 168, 1, 1 };
+	static const u8 net_addr[] = { 192, 168, 1, 1 };
 
 	for (i = 0; i < hw->dev_count; i++) {
 		if (info->netdev[i]) {

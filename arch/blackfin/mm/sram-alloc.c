@@ -256,7 +256,8 @@ static void *_sram_alloc(size_t size, struct sram_piece *pfree_head,
 		plast->next = pslot->next;
 		pavail = pslot;
 	} else {
-		pavail = kmem_cache_alloc(sram_piece_cache, GFP_KERNEL);
+		/* use atomic so our L1 allocator can be used atomically */
+		pavail = kmem_cache_alloc(sram_piece_cache, GFP_ATOMIC);
 
 		if (!pavail)
 			return NULL;
@@ -703,18 +704,18 @@ int sram_free_with_lsl(const void *addr)
 {
 	struct sram_list_struct *lsl, **tmp;
 	struct mm_struct *mm = current->mm;
+	int ret = -1;
 
 	for (tmp = &mm->context.sram_list; *tmp; tmp = &(*tmp)->next)
-		if ((*tmp)->addr == addr)
-			goto found;
-	return -1;
-found:
-	lsl = *tmp;
-	sram_free(addr);
-	*tmp = lsl->next;
-	kfree(lsl);
+		if ((*tmp)->addr == addr) {
+			lsl = *tmp;
+			ret = sram_free(addr);
+			*tmp = lsl->next;
+			kfree(lsl);
+			break;
+		}
 
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL(sram_free_with_lsl);
 

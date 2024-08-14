@@ -474,7 +474,7 @@ static int bnep_session(void *arg)
 	set_user_nice(current, -15);
 
 	init_waitqueue_entry(&wait, current);
-	add_wait_queue(sk->sk_sleep, &wait);
+	add_wait_queue(sk_sleep(sk), &wait);
 	while (!atomic_read(&s->killed)) {
 		set_current_state(TASK_INTERRUPTIBLE);
 
@@ -496,7 +496,7 @@ static int bnep_session(void *arg)
 		schedule();
 	}
 	set_current_state(TASK_RUNNING);
-	remove_wait_queue(sk->sk_sleep, &wait);
+	remove_wait_queue(sk_sleep(sk), &wait);
 
 	/* Cleanup session */
 	down_write(&bnep_session_sem);
@@ -507,7 +507,7 @@ static int bnep_session(void *arg)
 	/* Wakeup user-space polling for socket errors */
 	s->sock->sk->sk_err = EUNATCH;
 
-	wake_up_interruptible(s->sock->sk->sk_sleep);
+	wake_up_interruptible(sk_sleep(s->sock->sk));
 
 	/* Release the socket */
 	fput(s->sock->file);
@@ -638,7 +638,7 @@ int bnep_del_connection(struct bnep_conndel_req *req)
 
 		/* Kill session thread */
 		atomic_inc(&s->killed);
-		wake_up_interruptible(s->sock->sk->sk_sleep);
+		wake_up_interruptible(sk_sleep(s->sock->sk));
 	} else
 		err = -ENOENT;
 
@@ -648,6 +648,7 @@ int bnep_del_connection(struct bnep_conndel_req *req)
 
 static void __bnep_copy_ci(struct bnep_conninfo *ci, struct bnep_session *s)
 {
+	memset(ci, 0, sizeof(*ci));
 	memcpy(ci->dst, s->eh.h_source, ETH_ALEN);
 	strcpy(ci->device, s->dev->name);
 	ci->flags = s->flags;
@@ -706,8 +707,6 @@ int bnep_get_conninfo(struct bnep_conninfo *ci)
 static int __init bnep_init(void)
 {
 	char flt[50] = "";
-
-	l2cap_load();
 
 #ifdef CONFIG_BT_BNEP_PROTO_FILTER
 	strcat(flt, "protocol ");

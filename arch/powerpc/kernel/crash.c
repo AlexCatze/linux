@@ -24,7 +24,7 @@
 #include <linux/init.h>
 #include <linux/irq.h>
 #include <linux/types.h>
-#include <linux/lmb.h>
+#include <linux/memblock.h>
 
 #include <asm/processor.h>
 #include <asm/machdep.h>
@@ -48,7 +48,7 @@ int crashing_cpu = -1;
 static cpumask_t cpus_in_crash = CPU_MASK_NONE;
 cpumask_t cpus_in_sr = CPU_MASK_NONE;
 
-#define CRASH_HANDLER_MAX 2
+#define CRASH_HANDLER_MAX 3
 /* NULL terminated list of shutdown handles */
 static crash_shutdown_t crash_shutdown_handles[CRASH_HANDLER_MAX+1];
 static DEFINE_SPINLOCK(crash_handlers_lock);
@@ -125,7 +125,7 @@ static void crash_kexec_prepare_cpus(int cpu)
 	smp_wmb();
 
 	/*
-	 * FIXME: Until we will have the way to stop other CPUSs reliabally,
+	 * FIXME: Until we will have the way to stop other CPUs reliably,
 	 * the crash CPU will send an IPI and wait for other CPUs to
 	 * respond.
 	 * Delay of at least 10 seconds.
@@ -161,6 +161,34 @@ static void crash_kexec_prepare_cpus(int cpu)
 		crash_soft_reset_check(cpu);
 	/* Leave the IPI callback set */
 }
+
+/* wait for all the CPUs to hit real mode but timeout if they don't come in */
+#ifdef CONFIG_PPC_STD_MMU_64
+static void crash_kexec_wait_realmode(int cpu)
+{
+	unsigned int msecs;
+	int i;
+
+	msecs = 10000;
+	for (i=0; i < NR_CPUS && msecs > 0; i++) {
+		if (i == cpu)
+			continue;
+
+		while (paca[i].kexec_state < KEXEC_STATE_REAL_MODE) {
+			barrier();
+			if (!cpu_possible(i)) {
+				break;
+			}
+			if (!cpu_online(i)) {
+				break;
+			}
+			msecs--;
+			mdelay(1);
+		}
+	}
+	mb();
+}
+#endif	/* CONFIG_PPC_STD_MMU_64 */
 
 /*
  * This function will be called by secondary cpus or by kexec cpu
@@ -205,7 +233,9 @@ void crash_kexec_secondary(struct pt_regs *regs)
 	crash_ipi_callback(regs);
 }
 
-#else
+#else	/* ! CONFIG_SMP */
+static inline void crash_kexec_wait_realmode(int cpu) {}
+
 static void crash_kexec_prepare_cpus(int cpu)
 {
 	/*
@@ -225,73 +255,7 @@ void crash_kexec_secondary(struct pt_regs *regs)
 {
 	cpus_in_sr = CPU_MASK_NONE;
 }
-#endif
-#ifdef CONFIG_SPU_BASE
-
-#include <asm/spu.h>
-#include <asm/spu_priv1.h>
-
-struct crash_spu_info {
-	struct spu *spu;
-	u32 saved_spu_runcntl_RW;
-	u32 saved_spu_status_R;
-	u32 saved_spu_npc_RW;
-	u64 saved_mfc_sr1_RW;
-	u64 saved_mfc_dar;
-	u64 saved_mfc_dsisr;
-};
-
-#define CRASH_NUM_SPUS	16	/* Enough for current hardware */
-static struct crash_spu_info crash_spu_info[CRASH_NUM_SPUS];
-
-static void crash_kexec_stop_spus(void)
-{
-	struct spu *spu;
-	int i;
-	u64 tmp;
-
-	for (i = 0; i < CRASH_NUM_SPUS; i++) {
-		if (!crash_spu_info[i].spu)
-			continue;
-
-		spu = crash_spu_info[i].spu;
-
-		crash_spu_info[i].saved_spu_runcntl_RW =
-			in_be32(&spu->problem->spu_runcntl_RW);
-		crash_spu_info[i].saved_spu_status_R =
-			in_be32(&spu->problem->spu_status_R);
-		crash_spu_info[i].saved_spu_npc_RW =
-			in_be32(&spu->problem->spu_npc_RW);
-
-		crash_spu_info[i].saved_mfc_dar    = spu_mfc_dar_get(spu);
-		crash_spu_info[i].saved_mfc_dsisr  = spu_mfc_dsisr_get(spu);
-		tmp = spu_mfc_sr1_get(spu);
-		crash_spu_info[i].saved_mfc_sr1_RW = tmp;
-
-		tmp &= ~MFC_STATE1_MASTER_RUN_CONTROL_MASK;
-		spu_mfc_sr1_set(spu, tmp);
-
-		__delay(200);
-	}
-}
-
-void crash_register_spus(struct list_head *list)
-{
-	struct spu *spu;
-
-	list_for_each_entry(spu, list, full_list) {
-		if (WARN_ON(spu->number >= CRASH_NUM_SPUS))
-			continue;
-
-		crash_spu_info[spu->number].spu = spu;
-	}
-}
-
-#else
-static inline void crash_kexec_stop_spus(void)
-{
-}
-#endif /* CONFIG_SPU_BASE */
+#endif	/* CONFIG_SMP */
 
 /*
  * Register a function to be called on shutdown.  Only use this if you
@@ -347,10 +311,12 @@ int crash_shutdown_unregister(crash_shutdown_t handler)
 EXPORT_SYMBOL(crash_shutdown_unregister);
 
 static unsigned long crash_shutdown_buf[JMP_BUF_LEN];
+static int crash_shutdown_cpu = -1;
 
 static int handle_fault(struct pt_regs *regs)
 {
-	longjmp(crash_shutdown_buf, 1);
+	if (crash_shutdown_cpu == smp_processor_id())
+		longjmp(crash_shutdown_buf, 1);
 	return 0;
 }
 
@@ -372,15 +338,17 @@ void default_machine_crash_shutdown(struct pt_regs *regs)
 	 */
 	hard_irq_disable();
 
-	for_each_irq(i) {
-		struct irq_desc *desc = irq_to_desc(i);
+	/*
+	 * Make a note of crashing cpu. Will be used in machine_kexec
+	 * such that another IPI will not be sent.
+	 */
+	crashing_cpu = smp_processor_id();
+	crash_save_cpu(regs, crashing_cpu);
+	crash_kexec_prepare_cpus(crashing_cpu);
+	cpu_set(crashing_cpu, cpus_in_crash);
+	crash_kexec_wait_realmode(crashing_cpu);
 
-		if (desc->status & IRQ_INPROGRESS)
-			desc->chip->eoi(i);
-
-		if (!(desc->status & IRQ_DISABLED))
-			desc->chip->disable(i);
-	}
+	machine_kexec_mask_interrupts();
 
 	/*
 	 * Call registered shutdown routines savely.  Swap out
@@ -388,6 +356,7 @@ void default_machine_crash_shutdown(struct pt_regs *regs)
 	 */
 	old_handler = __debugger_fault_handler;
 	__debugger_fault_handler = handle_fault;
+	crash_shutdown_cpu = smp_processor_id();
 	for (i = 0; crash_shutdown_handles[i]; i++) {
 		if (setjmp(crash_shutdown_buf) == 0) {
 			/*
@@ -401,17 +370,9 @@ void default_machine_crash_shutdown(struct pt_regs *regs)
 			asm volatile("sync; isync");
 		}
 	}
+	crash_shutdown_cpu = -1;
 	__debugger_fault_handler = old_handler;
 
-	/*
-	 * Make a note of crashing cpu. Will be used in machine_kexec
-	 * such that another IPI will not be sent.
-	 */
-	crashing_cpu = smp_processor_id();
-	crash_save_cpu(regs, crashing_cpu);
-	crash_kexec_prepare_cpus(crashing_cpu);
-	cpu_set(crashing_cpu, cpus_in_crash);
-	crash_kexec_stop_spus();
 	if (ppc_md.kexec_cpu_down)
 		ppc_md.kexec_cpu_down(1, 0);
 }

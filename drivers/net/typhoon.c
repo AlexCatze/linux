@@ -24,10 +24,6 @@
 	3XP Processor. It has been tested on x86 and sparc64.
 
 	KNOWN ISSUES:
-	*) The current firmware always strips the VLAN tag off, even if
-		we tell it not to. You should filter VLANs at the switch
-		as a workaround (good practice in any event) until we can
-		get this fixed.
 	*) Cannot DMA Rx packets to a 2 byte aligned address. Also firmware
 		issue. Hopefully 3Com will fix it.
 	*) Waiting for a command response takes 8ms due to non-preemptable
@@ -127,12 +123,11 @@ static const int multicast_filter_limit = 32;
 #include <linux/in6.h>
 #include <linux/dma-mapping.h>
 #include <linux/firmware.h>
-#include <generated/utsrelease.h>
 
 #include "typhoon.h"
 
 MODULE_AUTHOR("David Dillow <dave@thedillows.org>");
-MODULE_VERSION(UTS_RELEASE);
+MODULE_VERSION("1.0");
 MODULE_LICENSE("GPL");
 MODULE_FIRMWARE(FIRMWARE_NAME);
 MODULE_DESCRIPTION("3Com Typhoon Family (3C990, 3CR990, and variants)");
@@ -255,7 +250,7 @@ struct typhoon_shared {
 	struct rx_free			rxBuff[RXFREE_ENTRIES]	__3xp_aligned;
 	u32				zeroWord;
 	struct tx_desc			txHi[TXHI_ENTRIES];
-} __attribute__ ((packed));
+} __packed;
 
 struct rxbuff_ent {
 	struct sk_buff *skb;
@@ -280,8 +275,6 @@ struct typhoon {
 	struct pci_dev *	pdev;
 	struct net_device *	dev;
 	struct napi_struct	napi;
-	spinlock_t		state_lock;
-	struct vlan_group *	vlgrp;
 	struct basic_ring	rxHiRing;
 	struct basic_ring	rxBuffRing;
 	struct rxbuff_ent	rxbuffers[RXENT_ENTRIES];
@@ -541,7 +534,7 @@ cleanup:
 
 	indexes->respCleared = cpu_to_le32(cleared);
 	wmb();
-	return (resp_save == NULL);
+	return resp_save == NULL;
 }
 
 static inline int
@@ -695,44 +688,6 @@ out:
 	return err;
 }
 
-static void
-typhoon_vlan_rx_register(struct net_device *dev, struct vlan_group *grp)
-{
-	struct typhoon *tp = netdev_priv(dev);
-	struct cmd_desc xp_cmd;
-	int err;
-
-	spin_lock_bh(&tp->state_lock);
-	if(!tp->vlgrp != !grp) {
-		/* We've either been turned on for the first time, or we've
-		 * been turned off. Update the 3XP.
-		 */
-		if(grp)
-			tp->offload |= TYPHOON_OFFLOAD_VLAN;
-		else
-			tp->offload &= ~TYPHOON_OFFLOAD_VLAN;
-
-		/* If the interface is up, the runtime is running -- and we
-		 * must be up for the vlan core to call us.
-		 *
-		 * Do the command outside of the spin lock, as it is slow.
-		 */
-		INIT_COMMAND_WITH_RESPONSE(&xp_cmd,
-					TYPHOON_CMD_SET_OFFLOAD_TASKS);
-		xp_cmd.parm2 = tp->offload;
-		xp_cmd.parm3 = tp->offload;
-		spin_unlock_bh(&tp->state_lock);
-		err = typhoon_issue_command(tp, 1, &xp_cmd, 0, NULL);
-		if(err < 0)
-			netdev_err(tp->dev, "vlan offload error %d\n", -err);
-		spin_lock_bh(&tp->state_lock);
-	}
-
-	/* now make the change visible */
-	tp->vlgrp = grp;
-	spin_unlock_bh(&tp->state_lock);
-}
-
 static inline void
 typhoon_tso_fill(struct sk_buff *skb, struct transmit_ring *txRing,
 			u32 ring_dma)
@@ -818,7 +773,7 @@ typhoon_start_tx(struct sk_buff *skb, struct net_device *dev)
 		first_txd->processFlags |=
 		    TYPHOON_TX_PF_INSERT_VLAN | TYPHOON_TX_PF_VLAN_PRIORITY;
 		first_txd->processFlags |=
-		    cpu_to_le32(ntohs(vlan_tx_tag_get(skb)) <<
+		    cpu_to_le32(htons(vlan_tx_tag_get(skb)) <<
 				TYPHOON_TX_PF_VLAN_TAG_SHIFT);
 	}
 
@@ -881,8 +836,6 @@ typhoon_start_tx(struct sk_buff *skb, struct net_device *dev)
 	wmb();
 	iowrite32(txRing->lastWrite, tp->tx_ioaddr + txRing->writeRegister);
 
-	dev->trans_start = jiffies;
-
 	/* If we don't have room to put the worst case packet on the
 	 * queue, then we must stop the queue. We need 2 extra
 	 * descriptors -- one to prevent ring wrap, and one for the
@@ -893,7 +846,7 @@ typhoon_start_tx(struct sk_buff *skb, struct net_device *dev)
 	if(typhoon_num_free_tx(txRing) < (numDesc + 2)) {
 		netif_stop_queue(dev);
 
-		/* A Tx complete IRQ could have gotten inbetween, making
+		/* A Tx complete IRQ could have gotten between, making
 		 * the ring free again. Only need to recheck here, since
 		 * Tx is serialized.
 		 */
@@ -920,11 +873,11 @@ typhoon_set_rx_mode(struct net_device *dev)
 		/* Too many to match, or accept all multicasts. */
 		filter |= TYPHOON_RX_FILTER_ALL_MCAST;
 	} else if (!netdev_mc_empty(dev)) {
-		struct dev_mc_list *mclist;
+		struct netdev_hw_addr *ha;
 
 		memset(mc_filter, 0, sizeof(mc_filter));
-		netdev_for_each_mc_addr(mclist, dev) {
-			int bit = ether_crc(ETH_ALEN, mclist->dmi_addr) & 0x3f;
+		netdev_for_each_mc_addr(ha, dev) {
+			int bit = ether_crc(ETH_ALEN, ha->addr) & 0x3f;
 			mc_filter[bit >> 5] |= 1 << (bit & 0x1f);
 		}
 
@@ -938,7 +891,7 @@ typhoon_set_rx_mode(struct net_device *dev)
 		filter |= TYPHOON_RX_FILTER_MCAST_HASH;
 	}
 
-	INIT_COMMAND_NO_RESPONSE(&xp_cmd, TYPHOON_CMD_SET_RX_FILTER);
+	INIT_COMMAND_WITH_RESPONSE(&xp_cmd, TYPHOON_CMD_SET_RX_FILTER);
 	xp_cmd.parm1 = filter;
 	typhoon_issue_command(tp, 1, &xp_cmd, 0, NULL);
 }
@@ -964,35 +917,33 @@ typhoon_do_get_stats(struct typhoon *tp)
 	 * The extra status reported would be a good candidate for
 	 * ethtool_ops->get_{strings,stats}()
 	 */
-	stats->tx_packets = le32_to_cpu(s->txPackets);
-	stats->tx_bytes = le64_to_cpu(s->txBytes);
-	stats->tx_errors = le32_to_cpu(s->txCarrierLost);
-	stats->tx_carrier_errors = le32_to_cpu(s->txCarrierLost);
-	stats->collisions = le32_to_cpu(s->txMultipleCollisions);
-	stats->rx_packets = le32_to_cpu(s->rxPacketsGood);
-	stats->rx_bytes = le64_to_cpu(s->rxBytesGood);
-	stats->rx_fifo_errors = le32_to_cpu(s->rxFifoOverruns);
+	stats->tx_packets = le32_to_cpu(s->txPackets) +
+			saved->tx_packets;
+	stats->tx_bytes = le64_to_cpu(s->txBytes) +
+			saved->tx_bytes;
+	stats->tx_errors = le32_to_cpu(s->txCarrierLost) +
+			saved->tx_errors;
+	stats->tx_carrier_errors = le32_to_cpu(s->txCarrierLost) +
+			saved->tx_carrier_errors;
+	stats->collisions = le32_to_cpu(s->txMultipleCollisions) +
+			saved->collisions;
+	stats->rx_packets = le32_to_cpu(s->rxPacketsGood) +
+			saved->rx_packets;
+	stats->rx_bytes = le64_to_cpu(s->rxBytesGood) +
+			saved->rx_bytes;
+	stats->rx_fifo_errors = le32_to_cpu(s->rxFifoOverruns) +
+			saved->rx_fifo_errors;
 	stats->rx_errors = le32_to_cpu(s->rxFifoOverruns) +
-			le32_to_cpu(s->BadSSD) + le32_to_cpu(s->rxCrcErrors);
-	stats->rx_crc_errors = le32_to_cpu(s->rxCrcErrors);
-	stats->rx_length_errors = le32_to_cpu(s->rxOversized);
+			le32_to_cpu(s->BadSSD) + le32_to_cpu(s->rxCrcErrors) +
+			saved->rx_errors;
+	stats->rx_crc_errors = le32_to_cpu(s->rxCrcErrors) +
+			saved->rx_crc_errors;
+	stats->rx_length_errors = le32_to_cpu(s->rxOversized) +
+			saved->rx_length_errors;
 	tp->speed = (s->linkStatus & TYPHOON_LINK_100MBPS) ?
 			SPEED_100 : SPEED_10;
 	tp->duplex = (s->linkStatus & TYPHOON_LINK_FULL_DUPLEX) ?
 			DUPLEX_FULL : DUPLEX_HALF;
-
-	/* add in the saved statistics
-	 */
-	stats->tx_packets += saved->tx_packets;
-	stats->tx_bytes += saved->tx_bytes;
-	stats->tx_errors += saved->tx_errors;
-	stats->collisions += saved->collisions;
-	stats->rx_packets += saved->rx_packets;
-	stats->rx_bytes += saved->rx_bytes;
-	stats->rx_fifo_errors += saved->rx_fifo_errors;
-	stats->rx_errors += saved->rx_errors;
-	stats->rx_crc_errors += saved->rx_crc_errors;
-	stats->rx_length_errors += saved->rx_length_errors;
 
 	return 0;
 }
@@ -1052,7 +1003,6 @@ typhoon_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info)
 	}
 
 	strcpy(info->driver, KBUILD_MODNAME);
-	strcpy(info->version, UTS_RELEASE);
 	strcpy(info->bus_info, pci_name(pci_dev));
 }
 
@@ -1202,6 +1152,20 @@ typhoon_get_rx_csum(struct net_device *dev)
 	return 1;
 }
 
+static int
+typhoon_set_flags(struct net_device *dev, u32 data)
+{
+	/* There's no way to turn off the RX VLAN offloading and stripping
+	 * on the current 3XP firmware -- it does not respect the offload
+	 * settings -- so we only allow the user to toggle the TX processing.
+	 */
+	if (!(data & ETH_FLAG_RXVLAN))
+		return -EINVAL;
+
+	return ethtool_op_set_flags(dev, data,
+				    ETH_FLAG_RXVLAN | ETH_FLAG_TXVLAN);
+}
+
 static void
 typhoon_get_ringparam(struct net_device *dev, struct ethtool_ringparam *ering)
 {
@@ -1228,6 +1192,8 @@ static const struct ethtool_ops typhoon_ethtool_ops = {
 	.set_sg			= ethtool_op_set_sg,
 	.set_tso		= ethtool_op_set_tso,
 	.get_ringparam		= typhoon_get_ringparam,
+	.set_flags		= typhoon_set_flags,
+	.get_flags		= ethtool_op_get_flags,
 };
 
 static int
@@ -1313,9 +1279,9 @@ typhoon_init_interface(struct typhoon *tp)
 
 	tp->offload = TYPHOON_OFFLOAD_IP_CHKSUM | TYPHOON_OFFLOAD_TCP_CHKSUM;
 	tp->offload |= TYPHOON_OFFLOAD_UDP_CHKSUM | TSO_OFFLOAD_ON;
+	tp->offload |= TYPHOON_OFFLOAD_VLAN;
 
 	spin_lock_init(&tp->command_lock);
-	spin_lock_init(&tp->state_lock);
 
 	/* Force the writes to the shared memory area out before continuing. */
 	wmb();
@@ -1332,7 +1298,7 @@ typhoon_init_rings(struct typhoon *tp)
 	tp->rxHiRing.lastWrite = 0;
 	tp->rxBuffRing.lastWrite = 0;
 	tp->cmdRing.lastWrite = 0;
-	tp->cmdRing.lastWrite = 0;
+	tp->respRing.lastWrite = 0;
 
 	tp->txLoRing.lastRead = 0;
 	tp->txHiRing.lastRead = 0;
@@ -1764,15 +1730,12 @@ typhoon_rx(struct typhoon *tp, struct basic_ring *rxRing, volatile __le32 * read
 		   (TYPHOON_RX_IP_CHK_GOOD | TYPHOON_RX_UDP_CHK_GOOD)) {
 			new_skb->ip_summed = CHECKSUM_UNNECESSARY;
 		} else
-			new_skb->ip_summed = CHECKSUM_NONE;
+			skb_checksum_none_assert(new_skb);
 
-		spin_lock(&tp->state_lock);
-		if(tp->vlgrp != NULL && rx->rxStatus & TYPHOON_RX_VLAN)
-			vlan_hwaccel_receive_skb(new_skb, tp->vlgrp,
-						 ntohl(rx->vlanTag) & 0xffff);
-		else
-			netif_receive_skb(new_skb);
-		spin_unlock(&tp->state_lock);
+		if (rx->rxStatus & TYPHOON_RX_VLAN)
+			__vlan_hwaccel_put_tag(new_skb,
+					       ntohl(rx->vlanTag) & 0xffff);
+		netif_receive_skb(new_skb);
 
 		received++;
 		budget--;
@@ -1993,11 +1956,9 @@ typhoon_start_runtime(struct typhoon *tp)
 		goto error_out;
 
 	INIT_COMMAND_NO_RESPONSE(&xp_cmd, TYPHOON_CMD_SET_OFFLOAD_TASKS);
-	spin_lock_bh(&tp->state_lock);
 	xp_cmd.parm2 = tp->offload;
 	xp_cmd.parm3 = tp->offload;
 	err = typhoon_issue_command(tp, 1, &xp_cmd, 0, NULL);
-	spin_unlock_bh(&tp->state_lock);
 	if(err < 0)
 		goto error_out;
 
@@ -2235,13 +2196,9 @@ typhoon_suspend(struct pci_dev *pdev, pm_message_t state)
 	if(!netif_running(dev))
 		return 0;
 
-	spin_lock_bh(&tp->state_lock);
-	if(tp->vlgrp && tp->wol_events & TYPHOON_WAKE_MAGIC_PKT) {
-		spin_unlock_bh(&tp->state_lock);
-		netdev_err(dev, "cannot do WAKE_MAGIC with VLANS\n");
-		return -EBUSY;
-	}
-	spin_unlock_bh(&tp->state_lock);
+	/* TYPHOON_OFFLOAD_VLAN is always on now, so this doesn't work */
+	if(tp->wol_events & TYPHOON_WAKE_MAGIC_PKT)
+		netdev_warn(dev, "cannot do WAKE_MAGIC with VLAN offloading\n");
 
 	netif_device_detach(dev);
 
@@ -2342,7 +2299,6 @@ static const struct net_device_ops typhoon_netdev_ops = {
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_set_mac_address	= typhoon_set_mac_address,
 	.ndo_change_mtu		= eth_change_mtu,
-	.ndo_vlan_rx_register	= typhoon_vlan_rx_register,
 };
 
 static int __devinit

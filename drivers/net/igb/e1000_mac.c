@@ -53,17 +53,30 @@ s32 igb_get_bus_info_pcie(struct e1000_hw *hw)
 	u16 pcie_link_status;
 
 	bus->type = e1000_bus_type_pci_express;
-	bus->speed = e1000_bus_speed_2500;
 
 	ret_val = igb_read_pcie_cap_reg(hw,
-					  PCIE_LINK_STATUS,
-					  &pcie_link_status);
-	if (ret_val)
+					PCI_EXP_LNKSTA,
+					&pcie_link_status);
+	if (ret_val) {
 		bus->width = e1000_bus_width_unknown;
-	else
+		bus->speed = e1000_bus_speed_unknown;
+	} else {
+		switch (pcie_link_status & PCI_EXP_LNKSTA_CLS) {
+		case PCI_EXP_LNKSTA_CLS_2_5GB:
+			bus->speed = e1000_bus_speed_2500;
+			break;
+		case PCI_EXP_LNKSTA_CLS_5_0GB:
+			bus->speed = e1000_bus_speed_5000;
+			break;
+		default:
+			bus->speed = e1000_bus_speed_unknown;
+			break;
+		}
+
 		bus->width = (enum e1000_bus_width)((pcie_link_status &
-						     PCIE_LINK_WIDTH_MASK) >>
-						     PCIE_LINK_WIDTH_SHIFT);
+						     PCI_EXP_LNKSTA_NLW) >>
+						     PCI_EXP_LNKSTA_NLW_SHIFT);
+	}
 
 	reg = rd32(E1000_STATUS);
 	bus->func = (reg & E1000_STATUS_FUNC_MASK) >> E1000_STATUS_FUNC_SHIFT;
@@ -168,7 +181,7 @@ s32 igb_vfta_set(struct e1000_hw *hw, u32 vid, bool add)
  *  address and must override the actual permanent MAC address.  If an
  *  alternate MAC address is fopund it is saved in the hw struct and
  *  prgrammed into RAR0 and the cuntion returns success, otherwise the
- *  fucntion returns an error.
+ *  function returns an error.
  **/
 s32 igb_check_alt_mac_addr(struct e1000_hw *hw)
 {
@@ -969,7 +982,7 @@ out:
 }
 
 /**
- *  igb_get_speed_and_duplex_copper - Retreive current speed/duplex
+ *  igb_get_speed_and_duplex_copper - Retrieve current speed/duplex
  *  @hw: pointer to the HW structure
  *  @speed: stores the current speed
  *  @duplex: stores the current duplex

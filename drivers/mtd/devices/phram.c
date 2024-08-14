@@ -15,7 +15,7 @@
  *	phram=swap,64Mi,128Mi phram=test,900Mi,1Mi
  */
 
-#define pr_fmt(fmt) "phram: " fmt
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <asm/io.h>
 #include <linux/init.h>
@@ -117,6 +117,7 @@ static void unregister_devices(void)
 	list_for_each_entry_safe(this, safe, &phram_list, list) {
 		del_mtd_device(&this->mtd);
 		iounmap(this->mtd.priv);
+		kfree(this->mtd.name);
 		kfree(this);
 	}
 }
@@ -275,6 +276,8 @@ static int phram_setup(const char *val, struct kernel_param *kp)
 	ret = register_device(name, start, len);
 	if (!ret)
 		pr_info("%s device: %#x at %#x\n", name, len, start);
+	else
+		kfree(name);
 
 	return ret;
 }

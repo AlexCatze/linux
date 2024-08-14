@@ -33,7 +33,7 @@ static char *sgiseeqstr = "SGI Seeq8003";
  * with that in mind, I've decided to make this driver look completely like a
  * stupid Lance from a driver architecture perspective.  Only difference is that
  * here our "ring buffer" looks and acts like a real Lance one does but is
- * layed out like how the HPC DMA and the Seeq want it to.  You'd be surprised
+ * laid out like how the HPC DMA and the Seeq want it to.  You'd be surprised
  * how a stupid idea like this can pay off in performance, not to mention
  * making this driver 2,000 times easier to write. ;-)
  */
@@ -77,7 +77,7 @@ struct sgiseeq_tx_desc {
 };
 
 /*
- * Warning: This structure is layed out in a certain way because HPC dma
+ * Warning: This structure is laid out in a certain way because HPC dma
  *          descriptors must be 8-byte aligned.  So don't touch this without
  *          some care.
  */
@@ -531,7 +531,7 @@ static int sgiseeq_open(struct net_device *dev)
 
 	if (request_irq(irq, sgiseeq_interrupt, 0, sgiseeqstr, dev)) {
 		printk(KERN_ERR "Seeq8003: Can't get irq %d\n", dev->irq);
-		err = -EAGAIN;
+		return -EAGAIN;
 	}
 
 	err = init_seeq(dev, sp, sregs);
@@ -574,7 +574,7 @@ static inline int sgiseeq_reset(struct net_device *dev)
 	if (err)
 		return err;
 
-	dev->trans_start = jiffies;
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	netif_wake_queue(dev);
 
 	return 0;
@@ -638,8 +638,6 @@ static int sgiseeq_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (!(hregs->tx_ctrl & HPC3_ETXCTRL_ACTIVE))
 		kick_tx(dev, sp, hregs);
 
-	dev->trans_start = jiffies;
-
 	if (!TX_BUFFS_AVAIL(sp))
 		netif_stop_queue(dev);
 	spin_unlock_irqrestore(&sp->tx_lock, flags);
@@ -652,7 +650,7 @@ static void timeout(struct net_device *dev)
 	printk(KERN_NOTICE "%s: transmit timed out, resetting\n", dev->name);
 	sgiseeq_reset(dev);
 
-	dev->trans_start = jiffies;
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	netif_wake_queue(dev);
 }
 
@@ -806,7 +804,7 @@ static int __devinit sgiseeq_probe(struct platform_device *pdev)
 err_out_free_page:
 	free_page((unsigned long) sp->srings);
 err_out_free_dev:
-	kfree(dev);
+	free_netdev(dev);
 
 err_out:
 	return err;

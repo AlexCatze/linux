@@ -302,7 +302,7 @@ static int eeprom_read(struct et131x_adapter *etdev, u32 addr, u8 *pdata)
 	err = eeprom_wait_ready(pdev, NULL);
 	if (err)
 		return err;
- 	/*
+	/*
 	 * Write to the LBCIF Control Register:  bit 7=1, bit 6=0, bit 3=0,
 	 * and bits 1:0 both =0.  Bit 5 should be set according to the type
 	 * of EEPROM being accessed (1=two byte addressing, 0=one byte
@@ -383,9 +383,9 @@ int et131x_init_eeprom(struct et131x_adapter *etdev)
 
 			/* This error could mean that there was an error
 			 * reading the eeprom or that the eeprom doesn't exist.
-			 * We will treat each case the same and not try to gather
-			 * additional information that normally would come from the
-			 * eeprom, like MAC Address
+			 * We will treat each case the same and not try to
+			 * gather additional information that normally would
+			 * come from the eeprom, like MAC Address
 			 */
 			etdev->has_eeprom = 0;
 			return -EIO;
@@ -396,12 +396,12 @@ int et131x_init_eeprom(struct et131x_adapter *etdev)
 	/* Read the EEPROM for information regarding LED behavior. Refer to
 	 * ET1310_phy.c, et131x_xcvr_init(), for its use.
 	 */
-	eeprom_read(etdev, 0x70, &etdev->eepromData[0]);
-	eeprom_read(etdev, 0x71, &etdev->eepromData[1]);
+	eeprom_read(etdev, 0x70, &etdev->eeprom_data[0]);
+	eeprom_read(etdev, 0x71, &etdev->eeprom_data[1]);
 
-	if (etdev->eepromData[0] != 0xcd)
+	if (etdev->eeprom_data[0] != 0xcd)
 		/* Disable all optional features */
-		etdev->eepromData[1] = 0x00;
+		etdev->eeprom_data[1] = 0x00;
 
 	return 0;
 }

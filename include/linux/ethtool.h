@@ -13,7 +13,11 @@
 #ifndef _LINUX_ETHTOOL_H
 #define _LINUX_ETHTOOL_H
 
+#ifdef __KERNEL__
+#include <linux/compat.h>
+#endif
 #include <linux/types.h>
+#include <linux/if_ether.h>
 
 /* This should work for both 32 and 64 bit userland. */
 struct ethtool_cmd {
@@ -250,6 +254,7 @@ enum ethtool_stringset {
 	ETH_SS_STATS,
 	ETH_SS_PRIV_FLAGS,
 	ETH_SS_NTUPLE_FILTERS,
+	ETH_SS_FEATURES,
 };
 
 /* for passing string sets for data tagging */
@@ -308,14 +313,28 @@ struct ethtool_perm_addr {
  * flag differs from the read-only value.
  */
 enum ethtool_flags {
+	ETH_FLAG_TXVLAN		= (1 << 7),	/* TX VLAN offload enabled */
+	ETH_FLAG_RXVLAN		= (1 << 8),	/* RX VLAN offload enabled */
 	ETH_FLAG_LRO		= (1 << 15),	/* LRO is enabled */
 	ETH_FLAG_NTUPLE		= (1 << 27),	/* N-tuple filters enabled */
+	ETH_FLAG_RXHASH		= (1 << 28),
 };
 
 /* The following structures are for supporting RX network flow
- * classification configuration. Note, all multibyte fields, e.g.,
- * ip4src, ip4dst, psrc, pdst, spi, etc. are expected to be in network
- * byte order.
+ * classification and RX n-tuple configuration. Note, all multibyte
+ * fields, e.g., ip4src, ip4dst, psrc, pdst, spi, etc. are expected to
+ * be in network byte order.
+ */
+
+/**
+ * struct ethtool_tcpip4_spec - flow specification for TCP/IPv4 etc.
+ * @ip4src: Source host
+ * @ip4dst: Destination host
+ * @psrc: Source port
+ * @pdst: Destination port
+ * @tos: Type-of-service
+ *
+ * This can be used to specify a TCP/IPv4, UDP/IPv4 or SCTP/IPv4 flow.
  */
 struct ethtool_tcpip4_spec {
 	__be32	ip4src;
@@ -325,6 +344,15 @@ struct ethtool_tcpip4_spec {
 	__u8    tos;
 };
 
+/**
+ * struct ethtool_ah_espip4_spec - flow specification for IPsec/IPv4
+ * @ip4src: Source host
+ * @ip4dst: Destination host
+ * @spi: Security parameters index
+ * @tos: Type-of-service
+ *
+ * This can be used to specify an IPsec transport or tunnel over IPv4.
+ */
 struct ethtool_ah_espip4_spec {
 	__be32	ip4src;
 	__be32	ip4dst;
@@ -332,21 +360,17 @@ struct ethtool_ah_espip4_spec {
 	__u8    tos;
 };
 
-struct ethtool_rawip4_spec {
-	__be32	ip4src;
-	__be32	ip4dst;
-	__u8	hdata[64];
-};
-
-struct ethtool_ether_spec {
-	__be16	ether_type;
-	__u8	frame_size;
-	__u8	eframe[16];
-};
-
 #define	ETH_RX_NFC_IP4	1
-#define	ETH_RX_NFC_IP6	2
 
+/**
+ * struct ethtool_usrip4_spec - general flow specification for IPv4
+ * @ip4src: Source host
+ * @ip4dst: Destination host
+ * @l4_4_bytes: First 4 bytes of transport (layer 4) header
+ * @tos: Type-of-service
+ * @ip_ver: Value must be %ETH_RX_NFC_IP4; mask must be 0
+ * @proto: Transport protocol number; mask must be 0
+ */
 struct ethtool_usrip4_spec {
 	__be32	ip4src;
 	__be32	ip4dst;
@@ -356,6 +380,15 @@ struct ethtool_usrip4_spec {
 	__u8    proto;
 };
 
+/**
+ * struct ethtool_rx_flow_spec - specification for RX flow filter
+ * @flow_type: Type of match to perform, e.g. %TCP_V4_FLOW
+ * @h_u: Flow fields to match (dependent on @flow_type)
+ * @m_u: Masks for flow field bits to be ignored
+ * @ring_cookie: RX ring/queue index to deliver to, or %RX_CLS_FLOW_DISC
+ *	if packets should be discarded
+ * @location: Index of filter in hardware table
+ */
 struct ethtool_rx_flow_spec {
 	__u32		flow_type;
 	union {
@@ -364,25 +397,122 @@ struct ethtool_rx_flow_spec {
 		struct ethtool_tcpip4_spec		sctp_ip4_spec;
 		struct ethtool_ah_espip4_spec		ah_ip4_spec;
 		struct ethtool_ah_espip4_spec		esp_ip4_spec;
-		struct ethtool_rawip4_spec		raw_ip4_spec;
-		struct ethtool_ether_spec		ether_spec;
 		struct ethtool_usrip4_spec		usr_ip4_spec;
-		__u8					hdata[64];
-	} h_u, m_u; /* entry, mask */
+		struct ethhdr				ether_spec;
+		__u8					hdata[72];
+	} h_u, m_u;
 	__u64		ring_cookie;
 	__u32		location;
 };
 
+/**
+ * struct ethtool_rxnfc - command to get or set RX flow classification rules
+ * @cmd: Specific command number - %ETHTOOL_GRXFH, %ETHTOOL_SRXFH,
+ *	%ETHTOOL_GRXRINGS, %ETHTOOL_GRXCLSRLCNT, %ETHTOOL_GRXCLSRULE,
+ *	%ETHTOOL_GRXCLSRLALL, %ETHTOOL_SRXCLSRLDEL or %ETHTOOL_SRXCLSRLINS
+ * @flow_type: Type of flow to be affected, e.g. %TCP_V4_FLOW
+ * @data: Command-dependent value
+ * @fs: Flow filter specification
+ * @rule_cnt: Number of rules to be affected
+ * @rule_locs: Array of valid rule indices
+ *
+ * For %ETHTOOL_GRXFH and %ETHTOOL_SRXFH, @data is a bitmask indicating
+ * the fields included in the flow hash, e.g. %RXH_IP_SRC.  The following
+ * structure fields must not be used.
+ *
+ * For %ETHTOOL_GRXRINGS, @data is set to the number of RX rings/queues
+ * on return.
+ *
+ * For %ETHTOOL_GRXCLSRLCNT, @rule_cnt is set to the number of defined
+ * rules on return.
+ *
+ * For %ETHTOOL_GRXCLSRULE, @fs.@location specifies the index of an
+ * existing filter rule on entry and @fs contains the rule on return.
+ *
+ * For %ETHTOOL_GRXCLSRLALL, @rule_cnt specifies the array size of the
+ * user buffer for @rule_locs on entry.  On return, @data is the size
+ * of the filter table and @rule_locs contains the indices of the
+ * defined rules.
+ *
+ * For %ETHTOOL_SRXCLSRLINS, @fs specifies the filter rule to add or
+ * update.  @fs.@location specifies the index to use and must not be
+ * ignored.
+ *
+ * For %ETHTOOL_SRXCLSRLDEL, @fs.@location specifies the index of an
+ * existing filter rule on entry.
+ *
+ * Implementation of indexed classification rules generally requires a
+ * TCAM.
+ */
 struct ethtool_rxnfc {
 	__u32				cmd;
 	__u32				flow_type;
-	/* The rx flow hash value or the rule DB size */
 	__u64				data;
 	struct ethtool_rx_flow_spec	fs;
 	__u32				rule_cnt;
 	__u32				rule_locs[0];
 };
 
+#ifdef __KERNEL__
+#ifdef CONFIG_COMPAT
+
+struct compat_ethtool_rx_flow_spec {
+	u32		flow_type;
+	union {
+		struct ethtool_tcpip4_spec		tcp_ip4_spec;
+		struct ethtool_tcpip4_spec		udp_ip4_spec;
+		struct ethtool_tcpip4_spec		sctp_ip4_spec;
+		struct ethtool_ah_espip4_spec		ah_ip4_spec;
+		struct ethtool_ah_espip4_spec		esp_ip4_spec;
+		struct ethtool_usrip4_spec		usr_ip4_spec;
+		struct ethhdr				ether_spec;
+		u8					hdata[72];
+	} h_u, m_u;
+	compat_u64	ring_cookie;
+	u32		location;
+};
+
+struct compat_ethtool_rxnfc {
+	u32				cmd;
+	u32				flow_type;
+	compat_u64			data;
+	struct compat_ethtool_rx_flow_spec fs;
+	u32				rule_cnt;
+	u32				rule_locs[0];
+};
+
+#endif /* CONFIG_COMPAT */
+#endif /* __KERNEL__ */
+
+/**
+ * struct ethtool_rxfh_indir - command to get or set RX flow hash indirection
+ * @cmd: Specific command number - %ETHTOOL_GRXFHINDIR or %ETHTOOL_SRXFHINDIR
+ * @size: On entry, the array size of the user buffer.  On return from
+ *	%ETHTOOL_GRXFHINDIR, the array size of the hardware indirection table.
+ * @ring_index: RX ring/queue index for each hash value
+ */
+struct ethtool_rxfh_indir {
+	__u32	cmd;
+	__u32	size;
+	__u32	ring_index[0];
+};
+
+/**
+ * struct ethtool_rx_ntuple_flow_spec - specification for RX flow filter
+ * @flow_type: Type of match to perform, e.g. %TCP_V4_FLOW
+ * @h_u: Flow field values to match (dependent on @flow_type)
+ * @m_u: Masks for flow field value bits to be ignored
+ * @vlan_tag: VLAN tag to match
+ * @vlan_tag_mask: Mask for VLAN tag bits to be ignored
+ * @data: Driver-dependent data to match
+ * @data_mask: Mask for driver-dependent data bits to be ignored
+ * @action: RX ring/queue index to deliver to (non-negative) or other action
+ *	(negative, e.g. %ETHTOOL_RXNTUPLE_ACTION_DROP)
+ *
+ * For flow types %TCP_V4_FLOW, %UDP_V4_FLOW and %SCTP_V4_FLOW, where
+ * a field value and mask are both zero this is treated as if all mask
+ * bits are set i.e. the field is ignored.
+ */
 struct ethtool_rx_ntuple_flow_spec {
 	__u32		 flow_type;
 	union {
@@ -391,22 +521,26 @@ struct ethtool_rx_ntuple_flow_spec {
 		struct ethtool_tcpip4_spec		sctp_ip4_spec;
 		struct ethtool_ah_espip4_spec		ah_ip4_spec;
 		struct ethtool_ah_espip4_spec		esp_ip4_spec;
-		struct ethtool_rawip4_spec		raw_ip4_spec;
-		struct ethtool_ether_spec		ether_spec;
 		struct ethtool_usrip4_spec		usr_ip4_spec;
-		__u8					hdata[64];
-	} h_u, m_u; /* entry, mask */
+		struct ethhdr				ether_spec;
+		__u8					hdata[72];
+	} h_u, m_u;
 
 	__u16	        vlan_tag;
 	__u16	        vlan_tag_mask;
-	__u64		data;      /* user-defined flow spec data */
-	__u64		data_mask; /* user-defined flow spec mask */
+	__u64		data;
+	__u64		data_mask;
 
-	/* signed to distinguish between queue and actions (DROP) */
 	__s32		action;
-#define ETHTOOL_RXNTUPLE_ACTION_DROP -1
+#define ETHTOOL_RXNTUPLE_ACTION_DROP	(-1)	/* drop packet */
+#define ETHTOOL_RXNTUPLE_ACTION_CLEAR	(-2)	/* clear filter */
 };
 
+/**
+ * struct ethtool_rx_ntuple - command to set or clear RX flow filter
+ * @cmd: Command number - %ETHTOOL_SRXNTUPLE
+ * @fs: Flow filter specification
+ */
 struct ethtool_rx_ntuple {
 	__u32					cmd;
 	struct ethtool_rx_ntuple_flow_spec	fs;
@@ -424,9 +558,98 @@ struct ethtool_flash {
 	char	data[ETHTOOL_FLASH_MAX_FILENAME];
 };
 
+/* for returning and changing feature sets */
+
+/**
+ * struct ethtool_get_features_block - block with state of 32 features
+ * @available: mask of changeable features
+ * @requested: mask of features requested to be enabled if possible
+ * @active: mask of currently enabled features
+ * @never_changed: mask of features not changeable for any device
+ */
+struct ethtool_get_features_block {
+	__u32	available;
+	__u32	requested;
+	__u32	active;
+	__u32	never_changed;
+};
+
+/**
+ * struct ethtool_gfeatures - command to get state of device's features
+ * @cmd: command number = %ETHTOOL_GFEATURES
+ * @size: in: number of elements in the features[] array;
+ *       out: number of elements in features[] needed to hold all features
+ * @features: state of features
+ */
+struct ethtool_gfeatures {
+	__u32	cmd;
+	__u32	size;
+	struct ethtool_get_features_block features[0];
+};
+
+/**
+ * struct ethtool_set_features_block - block with request for 32 features
+ * @valid: mask of features to be changed
+ * @requested: values of features to be changed
+ */
+struct ethtool_set_features_block {
+	__u32	valid;
+	__u32	requested;
+};
+
+/**
+ * struct ethtool_sfeatures - command to request change in device's features
+ * @cmd: command number = %ETHTOOL_SFEATURES
+ * @size: array size of the features[] array
+ * @features: feature change masks
+ */
+struct ethtool_sfeatures {
+	__u32	cmd;
+	__u32	size;
+	struct ethtool_set_features_block features[0];
+};
+
+/*
+ * %ETHTOOL_SFEATURES changes features present in features[].valid to the
+ * values of corresponding bits in features[].requested. Bits in .requested
+ * not set in .valid or not changeable are ignored.
+ *
+ * Returns %EINVAL when .valid contains undefined or never-changeable bits
+ * or size is not equal to required number of features words (32-bit blocks).
+ * Returns >= 0 if request was completed; bits set in the value mean:
+ *   %ETHTOOL_F_UNSUPPORTED - there were bits set in .valid that are not
+ *	changeable (not present in %ETHTOOL_GFEATURES' features[].available)
+ *	those bits were ignored.
+ *   %ETHTOOL_F_WISH - some or all changes requested were recorded but the
+ *      resulting state of bits masked by .valid is not equal to .requested.
+ *      Probably there are other device-specific constraints on some features
+ *      in the set. When %ETHTOOL_F_UNSUPPORTED is set, .valid is considered
+ *      here as though ignored bits were cleared.
+ *   %ETHTOOL_F_COMPAT - some or all changes requested were made by calling
+ *      compatibility functions. Requested offload state cannot be properly
+ *      managed by kernel.
+ *
+ * Meaning of bits in the masks are obtained by %ETHTOOL_GSSET_INFO (number of
+ * bits in the arrays - always multiple of 32) and %ETHTOOL_GSTRINGS commands
+ * for ETH_SS_FEATURES string set. First entry in the table corresponds to least
+ * significant bit in features[0] fields. Empty strings mark undefined features.
+ */
+enum ethtool_sfeatures_retval_bits {
+	ETHTOOL_F_UNSUPPORTED__BIT,
+	ETHTOOL_F_WISH__BIT,
+	ETHTOOL_F_COMPAT__BIT,
+};
+
+#define ETHTOOL_F_UNSUPPORTED   (1 << ETHTOOL_F_UNSUPPORTED__BIT)
+#define ETHTOOL_F_WISH          (1 << ETHTOOL_F_WISH__BIT)
+#define ETHTOOL_F_COMPAT        (1 << ETHTOOL_F_COMPAT__BIT)
+
 #ifdef __KERNEL__
 
 #include <linux/rculist.h>
+
+/* needed by dev_disable_lro() */
+extern int __ethtool_set_flags(struct net_device *dev, u32 flags);
 
 struct ethtool_rx_ntuple_flow_spec_container {
 	struct ethtool_rx_ntuple_flow_spec fs;
@@ -444,7 +667,6 @@ struct net_device;
 
 /* Some generic methods drivers may use in their ethtool_ops */
 u32 ethtool_op_get_link(struct net_device *dev);
-u32 ethtool_op_get_rx_csum(struct net_device *dev);
 u32 ethtool_op_get_tx_csum(struct net_device *dev);
 int ethtool_op_set_tx_csum(struct net_device *dev, u32 data);
 int ethtool_op_set_tx_hw_csum(struct net_device *dev, u32 data);
@@ -456,8 +678,9 @@ int ethtool_op_set_tso(struct net_device *dev, u32 data);
 u32 ethtool_op_get_ufo(struct net_device *dev);
 int ethtool_op_set_ufo(struct net_device *dev, u32 data);
 u32 ethtool_op_get_flags(struct net_device *dev);
-int ethtool_op_set_flags(struct net_device *dev, u32 data);
+int ethtool_op_set_flags(struct net_device *dev, u32 data, u32 supported);
 void ethtool_ntuple_flush(struct net_device *dev);
+bool ethtool_invalid_flags(struct net_device *dev, u32 data, u32 supported);
 
 /**
  * &ethtool_ops - Alter and report network device settings
@@ -490,12 +713,12 @@ void ethtool_ntuple_flush(struct net_device *dev);
  * get_ufo: Report whether UDP fragmentation offload is enabled
  * set_ufo: Turn UDP fragmentation offload on or off
  * self_test: Run specified self-tests
- * get_strings: Return a set of strings that describe the requested objects 
+ * get_strings: Return a set of strings that describe the requested objects
  * phys_id: Identify the device
  * get_stats: Return statistics about the device
  * get_flags: get 32-bit flags bitmap
  * set_flags: set 32-bit flags bitmap
- * 
+ *
  * Description:
  *
  * get_settings:
@@ -531,14 +754,20 @@ struct ethtool_ops {
 	int	(*nway_reset)(struct net_device *);
 	u32	(*get_link)(struct net_device *);
 	int	(*get_eeprom_len)(struct net_device *);
-	int	(*get_eeprom)(struct net_device *, struct ethtool_eeprom *, u8 *);
-	int	(*set_eeprom)(struct net_device *, struct ethtool_eeprom *, u8 *);
+	int	(*get_eeprom)(struct net_device *,
+			      struct ethtool_eeprom *, u8 *);
+	int	(*set_eeprom)(struct net_device *,
+			      struct ethtool_eeprom *, u8 *);
 	int	(*get_coalesce)(struct net_device *, struct ethtool_coalesce *);
 	int	(*set_coalesce)(struct net_device *, struct ethtool_coalesce *);
-	void	(*get_ringparam)(struct net_device *, struct ethtool_ringparam *);
-	int	(*set_ringparam)(struct net_device *, struct ethtool_ringparam *);
-	void	(*get_pauseparam)(struct net_device *, struct ethtool_pauseparam*);
-	int	(*set_pauseparam)(struct net_device *, struct ethtool_pauseparam*);
+	void	(*get_ringparam)(struct net_device *,
+				 struct ethtool_ringparam *);
+	int	(*set_ringparam)(struct net_device *,
+				 struct ethtool_ringparam *);
+	void	(*get_pauseparam)(struct net_device *,
+				  struct ethtool_pauseparam*);
+	int	(*set_pauseparam)(struct net_device *,
+				  struct ethtool_pauseparam*);
 	u32	(*get_rx_csum)(struct net_device *);
 	int	(*set_rx_csum)(struct net_device *, u32);
 	u32	(*get_tx_csum)(struct net_device *);
@@ -550,22 +779,29 @@ struct ethtool_ops {
 	void	(*self_test)(struct net_device *, struct ethtool_test *, u64 *);
 	void	(*get_strings)(struct net_device *, u32 stringset, u8 *);
 	int	(*phys_id)(struct net_device *, u32);
-	void	(*get_ethtool_stats)(struct net_device *, struct ethtool_stats *, u64 *);
+	void	(*get_ethtool_stats)(struct net_device *,
+				     struct ethtool_stats *, u64 *);
 	int	(*begin)(struct net_device *);
 	void	(*complete)(struct net_device *);
-	u32     (*get_ufo)(struct net_device *);
-	int     (*set_ufo)(struct net_device *, u32);
-	u32     (*get_flags)(struct net_device *);
-	int     (*set_flags)(struct net_device *, u32);
-	u32     (*get_priv_flags)(struct net_device *);
-	int     (*set_priv_flags)(struct net_device *, u32);
+	u32	(*get_ufo)(struct net_device *);
+	int	(*set_ufo)(struct net_device *, u32);
+	u32	(*get_flags)(struct net_device *);
+	int	(*set_flags)(struct net_device *, u32);
+	u32	(*get_priv_flags)(struct net_device *);
+	int	(*set_priv_flags)(struct net_device *, u32);
 	int	(*get_sset_count)(struct net_device *, int);
-	int	(*get_rxnfc)(struct net_device *, struct ethtool_rxnfc *, void *);
+	int	(*get_rxnfc)(struct net_device *,
+			     struct ethtool_rxnfc *, void *);
 	int	(*set_rxnfc)(struct net_device *, struct ethtool_rxnfc *);
-	int     (*flash_device)(struct net_device *, struct ethtool_flash *);
+	int	(*flash_device)(struct net_device *, struct ethtool_flash *);
 	int	(*reset)(struct net_device *, u32 *);
-	int	(*set_rx_ntuple)(struct net_device *, struct ethtool_rx_ntuple *);
+	int	(*set_rx_ntuple)(struct net_device *,
+				 struct ethtool_rx_ntuple *);
 	int	(*get_rx_ntuple)(struct net_device *, u32 stringset, void *);
+	int	(*get_rxfh_indir)(struct net_device *,
+				  struct ethtool_rxfh_indir *);
+	int	(*set_rxfh_indir)(struct net_device *,
+				  const struct ethtool_rxfh_indir *);
 };
 #endif /* __KERNEL__ */
 
@@ -579,7 +815,9 @@ struct ethtool_ops {
 #define ETHTOOL_GMSGLVL		0x00000007 /* Get driver message level */
 #define ETHTOOL_SMSGLVL		0x00000008 /* Set driver msg level. */
 #define ETHTOOL_NWAY_RST	0x00000009 /* Restart autonegotiation. */
-#define ETHTOOL_GLINK		0x0000000a /* Get link status (ethtool_value) */
+/* Get link status for host, i.e. whether the interface *and* the
+ * physical port (if there is one) are up (ethtool_value). */
+#define ETHTOOL_GLINK		0x0000000a
 #define ETHTOOL_GEEPROM		0x0000000b /* Get EEPROM data */
 #define ETHTOOL_SEEPROM		0x0000000c /* Set EEPROM data. */
 #define ETHTOOL_GCOALESCE	0x0000000e /* Get coalesce config */
@@ -612,21 +850,26 @@ struct ethtool_ops {
 #define ETHTOOL_GPFLAGS		0x00000027 /* Get driver-private flags bitmap */
 #define ETHTOOL_SPFLAGS		0x00000028 /* Set driver-private flags bitmap */
 
-#define	ETHTOOL_GRXFH		0x00000029 /* Get RX flow hash configuration */
-#define	ETHTOOL_SRXFH		0x0000002a /* Set RX flow hash configuration */
+#define ETHTOOL_GRXFH		0x00000029 /* Get RX flow hash configuration */
+#define ETHTOOL_SRXFH		0x0000002a /* Set RX flow hash configuration */
 #define ETHTOOL_GGRO		0x0000002b /* Get GRO enable (ethtool_value) */
 #define ETHTOOL_SGRO		0x0000002c /* Set GRO enable (ethtool_value) */
-#define	ETHTOOL_GRXRINGS	0x0000002d /* Get RX rings available for LB */
-#define	ETHTOOL_GRXCLSRLCNT	0x0000002e /* Get RX class rule count */
-#define	ETHTOOL_GRXCLSRULE	0x0000002f /* Get RX classification rule */
-#define	ETHTOOL_GRXCLSRLALL	0x00000030 /* Get all RX classification rule */
-#define	ETHTOOL_SRXCLSRLDEL	0x00000031 /* Delete RX classification rule */
-#define	ETHTOOL_SRXCLSRLINS	0x00000032 /* Insert RX classification rule */
-#define	ETHTOOL_FLASHDEV	0x00000033 /* Flash firmware to device */
-#define	ETHTOOL_RESET		0x00000034 /* Reset hardware */
-#define	ETHTOOL_SRXNTUPLE	0x00000035 /* Add an n-tuple filter to device */
-#define	ETHTOOL_GRXNTUPLE	0x00000036 /* Get n-tuple filters from device */
-#define	ETHTOOL_GSSET_INFO	0x00000037 /* Get string set info */
+#define ETHTOOL_GRXRINGS	0x0000002d /* Get RX rings available for LB */
+#define ETHTOOL_GRXCLSRLCNT	0x0000002e /* Get RX class rule count */
+#define ETHTOOL_GRXCLSRULE	0x0000002f /* Get RX classification rule */
+#define ETHTOOL_GRXCLSRLALL	0x00000030 /* Get all RX classification rule */
+#define ETHTOOL_SRXCLSRLDEL	0x00000031 /* Delete RX classification rule */
+#define ETHTOOL_SRXCLSRLINS	0x00000032 /* Insert RX classification rule */
+#define ETHTOOL_FLASHDEV	0x00000033 /* Flash firmware to device */
+#define ETHTOOL_RESET		0x00000034 /* Reset hardware */
+#define ETHTOOL_SRXNTUPLE	0x00000035 /* Add an n-tuple filter to device */
+#define ETHTOOL_GRXNTUPLE	0x00000036 /* Get n-tuple filters from device */
+#define ETHTOOL_GSSET_INFO	0x00000037 /* Get string set info */
+#define ETHTOOL_GRXFHINDIR	0x00000038 /* Get RX flow hash indir'n table */
+#define ETHTOOL_SRXFHINDIR	0x00000039 /* Set RX flow hash indir'n table */
+
+#define ETHTOOL_GFEATURES	0x0000003a /* Get device offload settings */
+#define ETHTOOL_SFEATURES	0x0000003b /* Change device offload settings */
 
 /* compatibility with older code */
 #define SPARC_ETH_GSET		ETHTOOL_GSET
@@ -732,22 +975,23 @@ struct ethtool_ops {
 #define WAKE_MAGIC		(1 << 5)
 #define WAKE_MAGICSECURE	(1 << 6) /* only meaningful if WAKE_MAGIC */
 
-/* L3-L4 network traffic flow types */
-#define	TCP_V4_FLOW	0x01
-#define	UDP_V4_FLOW	0x02
-#define	SCTP_V4_FLOW	0x03
-#define	AH_ESP_V4_FLOW	0x04
-#define	TCP_V6_FLOW	0x05
-#define	UDP_V6_FLOW	0x06
-#define	SCTP_V6_FLOW	0x07
-#define	AH_ESP_V6_FLOW	0x08
-#define	AH_V4_FLOW	0x09
-#define	ESP_V4_FLOW	0x0a
-#define	AH_V6_FLOW	0x0b
-#define	ESP_V6_FLOW	0x0c
-#define	IP_USER_FLOW	0x0d
-#define IPV4_FLOW       0x10
-#define IPV6_FLOW       0x11
+/* L2-L4 network traffic flow types */
+#define	TCP_V4_FLOW	0x01	/* hash or spec (tcp_ip4_spec) */
+#define	UDP_V4_FLOW	0x02	/* hash or spec (udp_ip4_spec) */
+#define	SCTP_V4_FLOW	0x03	/* hash or spec (sctp_ip4_spec) */
+#define	AH_ESP_V4_FLOW	0x04	/* hash only */
+#define	TCP_V6_FLOW	0x05	/* hash only */
+#define	UDP_V6_FLOW	0x06	/* hash only */
+#define	SCTP_V6_FLOW	0x07	/* hash only */
+#define	AH_ESP_V6_FLOW	0x08	/* hash only */
+#define	AH_V4_FLOW	0x09	/* hash or spec (ah_ip4_spec) */
+#define	ESP_V4_FLOW	0x0a	/* hash or spec (esp_ip4_spec) */
+#define	AH_V6_FLOW	0x0b	/* hash only */
+#define	ESP_V6_FLOW	0x0c	/* hash only */
+#define	IP_USER_FLOW	0x0d	/* spec only (usr_ip4_spec) */
+#define	IPV4_FLOW	0x10	/* hash only */
+#define	IPV6_FLOW	0x11	/* hash only */
+#define	ETHER_FLOW	0x12	/* spec only (ether_spec) */
 
 /* L3-L4 network traffic flow hash options */
 #define	RXH_L2DA	(1 << 1)

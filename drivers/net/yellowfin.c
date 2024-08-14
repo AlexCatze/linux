@@ -564,7 +564,6 @@ static void mdio_write(void __iomem *ioaddr, int phy_id, int location, int value
 	for (i = 10000; i >= 0; i--)
 		if ((ioread16(ioaddr + MII_Status) & 1) == 0)
 			break;
-	return;
 }
 
 
@@ -647,7 +646,7 @@ static int yellowfin_open(struct net_device *dev)
 	init_timer(&yp->timer);
 	yp->timer.expires = jiffies + 3*HZ;
 	yp->timer.data = (unsigned long)dev;
-	yp->timer.function = &yellowfin_timer;				/* timer handler */
+	yp->timer.function = yellowfin_timer;				/* timer handler */
 	add_timer(&yp->timer);
 
 	return 0;
@@ -745,7 +744,7 @@ static int yellowfin_init_ring(struct net_device *dev)
 	}
 
 	for (i = 0; i < RX_RING_SIZE; i++) {
-		struct sk_buff *skb = dev_alloc_skb(yp->rx_buf_sz);
+		struct sk_buff *skb = dev_alloc_skb(yp->rx_buf_sz + 2);
 		yp->rx_skbuff[i] = skb;
 		if (skb == NULL)
 			break;
@@ -1158,7 +1157,7 @@ static int yellowfin_rx(struct net_device *dev)
 	for (; yp->cur_rx - yp->dirty_rx > 0; yp->dirty_rx++) {
 		entry = yp->dirty_rx % RX_RING_SIZE;
 		if (yp->rx_skbuff[entry] == NULL) {
-			struct sk_buff *skb = dev_alloc_skb(yp->rx_buf_sz);
+			struct sk_buff *skb = dev_alloc_skb(yp->rx_buf_sz + 2);
 			if (skb == NULL)
 				break;				/* Better luck next round. */
 			yp->rx_skbuff[entry] = skb;
@@ -1299,25 +1298,25 @@ static void set_rx_mode(struct net_device *dev)
 		/* Too many to filter well, or accept all multicasts. */
 		iowrite16(0x000B, ioaddr + AddrMode);
 	} else if (!netdev_mc_empty(dev)) { /* Must use the multicast hash table. */
-		struct dev_mc_list *mclist;
+		struct netdev_hw_addr *ha;
 		u16 hash_table[4];
 		int i;
 
 		memset(hash_table, 0, sizeof(hash_table));
-		netdev_for_each_mc_addr(mclist, dev) {
+		netdev_for_each_mc_addr(ha, dev) {
 			unsigned int bit;
 
 			/* Due to a bug in the early chip versions, multiple filter
 			   slots must be set for each address. */
 			if (yp->drv_flags & HasMulticastBug) {
-				bit = (ether_crc_le(3, mclist->dmi_addr) >> 3) & 0x3f;
+				bit = (ether_crc_le(3, ha->addr) >> 3) & 0x3f;
 				hash_table[bit >> 4] |= (1 << bit);
-				bit = (ether_crc_le(4, mclist->dmi_addr) >> 3) & 0x3f;
+				bit = (ether_crc_le(4, ha->addr) >> 3) & 0x3f;
 				hash_table[bit >> 4] |= (1 << bit);
-				bit = (ether_crc_le(5, mclist->dmi_addr) >> 3) & 0x3f;
+				bit = (ether_crc_le(5, ha->addr) >> 3) & 0x3f;
 				hash_table[bit >> 4] |= (1 << bit);
 			}
-			bit = (ether_crc_le(6, mclist->dmi_addr) >> 3) & 0x3f;
+			bit = (ether_crc_le(6, ha->addr) >> 3) & 0x3f;
 			hash_table[bit >> 4] |= (1 << bit);
 		}
 		/* Copy the hash table to the chip. */

@@ -557,7 +557,7 @@ s3c2410_dma_lastxfer(struct s3c2410_dma_chan *chan)
 		break;
 
 	case S3C2410_DMALOAD_1LOADED_1RUNNING:
-		/* I belive in this case we do not have anything to do
+		/* I believe in this case we do not have anything to do
 		 * until the next buffer comes along, and we turn off the
 		 * reload */
 		return;
@@ -1104,7 +1104,7 @@ EXPORT_SYMBOL(s3c2410_dma_config);
  * devaddr:   physical address of the source
 */
 
-int s3c2410_dma_devconfig(int channel,
+int s3c2410_dma_devconfig(unsigned int channel,
 			  enum s3c2410_dmasrc source,
 			  unsigned long devaddr)
 {

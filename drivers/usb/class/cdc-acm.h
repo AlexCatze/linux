@@ -52,7 +52,7 @@
  */
 
 /*
- * The only reason to have several buffers is to accomodate assumptions
+ * The only reason to have several buffers is to accommodate assumptions
  * in line disciplines. They ask for empty space amount, receive our URB size,
  * and proceed to issue several 1-character writes, assuming they will fit.
  * The very first write takes a complete URB. Fortunately, this only happens
@@ -124,8 +124,8 @@ struct acm {
 	unsigned char clocal;				/* termios CLOCAL */
 	unsigned int ctrl_caps;				/* control capabilities from the class specific header */
 	unsigned int susp_count;			/* number of suspended interfaces */
-	int combined_interfaces:1;			/* control and data collapsed */
-	int is_int_ep:1;				/* interrupt endpoints contrary to spec used */
+	unsigned int combined_interfaces:1;		/* control and data collapsed */
+	unsigned int is_int_ep:1;			/* interrupt endpoints contrary to spec used */
 	u8 bInterval;
 	struct acm_wb *delayed_wb;			/* write queued for a device about to be woken */
 };

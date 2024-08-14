@@ -240,36 +240,15 @@ static int mpc5121_rtc_alarm_irq_enable(struct device *dev,
 	return 0;
 }
 
-static int mpc5121_rtc_update_irq_enable(struct device *dev,
-					 unsigned int enabled)
-{
-	struct mpc5121_rtc_data *rtc = dev_get_drvdata(dev);
-	struct mpc5121_rtc_regs __iomem *regs = rtc->regs;
-	int val;
-
-	val = in_8(&regs->int_enable);
-
-	if (enabled)
-		val = (val & ~0x8) | 0x1;
-	else
-		val &= ~0x1;
-
-	out_8(&regs->int_enable, val);
-
-	return 0;
-}
-
 static const struct rtc_class_ops mpc5121_rtc_ops = {
 	.read_time = mpc5121_rtc_read_time,
 	.set_time = mpc5121_rtc_set_time,
 	.read_alarm = mpc5121_rtc_read_alarm,
 	.set_alarm = mpc5121_rtc_set_alarm,
 	.alarm_irq_enable = mpc5121_rtc_alarm_irq_enable,
-	.update_irq_enable = mpc5121_rtc_update_irq_enable,
 };
 
-static int __devinit mpc5121_rtc_probe(struct of_device *op,
-					const struct of_device_id *match)
+static int __devinit mpc5121_rtc_probe(struct platform_device *op)
 {
 	struct mpc5121_rtc_data *rtc;
 	int err = 0;
@@ -279,7 +258,7 @@ static int __devinit mpc5121_rtc_probe(struct of_device *op,
 	if (!rtc)
 		return -ENOMEM;
 
-	rtc->regs = of_iomap(op->node, 0);
+	rtc->regs = of_iomap(op->dev.of_node, 0);
 	if (!rtc->regs) {
 		dev_err(&op->dev, "%s: couldn't map io space\n", __func__);
 		err = -ENOSYS;
@@ -290,7 +269,7 @@ static int __devinit mpc5121_rtc_probe(struct of_device *op,
 
 	dev_set_drvdata(&op->dev, rtc);
 
-	rtc->irq = irq_of_parse_and_map(op->node, 1);
+	rtc->irq = irq_of_parse_and_map(op->dev.of_node, 1);
 	err = request_irq(rtc->irq, mpc5121_rtc_handler, IRQF_DISABLED,
 						"mpc5121-rtc", &op->dev);
 	if (err) {
@@ -299,7 +278,7 @@ static int __devinit mpc5121_rtc_probe(struct of_device *op,
 		goto out_dispose;
 	}
 
-	rtc->irq_periodic = irq_of_parse_and_map(op->node, 0);
+	rtc->irq_periodic = irq_of_parse_and_map(op->dev.of_node, 0);
 	err = request_irq(rtc->irq_periodic, mpc5121_rtc_handler_upd,
 				IRQF_DISABLED, "mpc5121-rtc_upd", &op->dev);
 	if (err) {
@@ -338,7 +317,7 @@ out_free:
 	return err;
 }
 
-static int __devexit mpc5121_rtc_remove(struct of_device *op)
+static int __devexit mpc5121_rtc_remove(struct platform_device *op)
 {
 	struct mpc5121_rtc_data *rtc = dev_get_drvdata(&op->dev);
 	struct mpc5121_rtc_regs __iomem *regs = rtc->regs;
@@ -364,23 +343,25 @@ static struct of_device_id mpc5121_rtc_match[] __devinitdata = {
 	{},
 };
 
-static struct of_platform_driver mpc5121_rtc_driver = {
-	.owner = THIS_MODULE,
-	.name = "mpc5121-rtc",
-	.match_table = mpc5121_rtc_match,
+static struct platform_driver mpc5121_rtc_driver = {
+	.driver = {
+		.name = "mpc5121-rtc",
+		.owner = THIS_MODULE,
+		.of_match_table = mpc5121_rtc_match,
+	},
 	.probe = mpc5121_rtc_probe,
 	.remove = __devexit_p(mpc5121_rtc_remove),
 };
 
 static int __init mpc5121_rtc_init(void)
 {
-	return of_register_platform_driver(&mpc5121_rtc_driver);
+	return platform_driver_register(&mpc5121_rtc_driver);
 }
 module_init(mpc5121_rtc_init);
 
 static void __exit mpc5121_rtc_exit(void)
 {
-	of_unregister_platform_driver(&mpc5121_rtc_driver);
+	platform_driver_unregister(&mpc5121_rtc_driver);
 }
 module_exit(mpc5121_rtc_exit);
 

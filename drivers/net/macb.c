@@ -260,7 +260,7 @@ static int macb_mii_init(struct macb *bp)
 	for (i = 0; i < PHY_MAX_ADDR; i++)
 		bp->mii_bus->irq[i] = PHY_POLL;
 
-	platform_set_drvdata(bp->dev, bp->mii_bus);
+	dev_set_drvdata(&bp->dev->dev, bp->mii_bus);
 
 	if (mdiobus_register(bp->mii_bus))
 		goto err_out_free_mdio_irq;
@@ -407,7 +407,7 @@ static int macb_rx_frame(struct macb *bp, unsigned int first_frag,
 	}
 
 	skb_reserve(skb, RX_OFFSET);
-	skb->ip_summed = CHECKSUM_NONE;
+	skb_checksum_none_assert(skb);
 	skb_put(skb, len);
 
 	for (frag = first_frag; ; frag = NEXT_RX(frag)) {
@@ -515,14 +515,15 @@ static int macb_poll(struct napi_struct *napi, int budget)
 		(unsigned long)status, budget);
 
 	work_done = macb_rx(bp, budget);
-	if (work_done < budget)
+	if (work_done < budget) {
 		napi_complete(napi);
 
-	/*
-	 * We've done what we can to clean the buffers. Make sure we
-	 * get notified when new packets arrive.
-	 */
-	macb_writel(bp, IER, MACB_RX_INT_FLAGS);
+		/*
+		 * We've done what we can to clean the buffers. Make sure we
+		 * get notified when new packets arrive.
+		 */
+		macb_writel(bp, IER, MACB_RX_INT_FLAGS);
+	}
 
 	/* TODO: Handle errors */
 
@@ -550,12 +551,16 @@ static irqreturn_t macb_interrupt(int irq, void *dev_id)
 		}
 
 		if (status & MACB_RX_INT_FLAGS) {
+			/*
+			 * There's no point taking any more interrupts
+			 * until we have processed the buffers. The
+			 * scheduling call may fail if the poll routine
+			 * is already scheduled, so disable interrupts
+			 * now.
+			 */
+			macb_writel(bp, IDR, MACB_RX_INT_FLAGS);
+
 			if (napi_schedule_prep(&bp->napi)) {
-				/*
-				 * There's no point taking any more interrupts
-				 * until we have processed the buffers
-				 */
-				macb_writel(bp, IDR, MACB_RX_INT_FLAGS);
 				dev_dbg(&bp->pdev->dev,
 					"scheduling RX softirq\n");
 				__napi_schedule(&bp->napi);
@@ -665,8 +670,6 @@ static int macb_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		netif_stop_queue(dev);
 
 	spin_unlock_irqrestore(&bp->lock, flags);
-
-	dev->trans_start = jiffies;
 
 	return NETDEV_TX_OK;
 }
@@ -793,6 +796,7 @@ static void macb_init_hw(struct macb *bp)
 	config = macb_readl(bp, NCFGR) & MACB_BF(CLK, -1L);
 	config |= MACB_BIT(PAE);		/* PAuse Enable */
 	config |= MACB_BIT(DRFCS);		/* Discard Rx FCS */
+	config |= MACB_BIT(BIG);		/* Receive oversized frames */
 	if (bp->dev->flags & IFF_PROMISC)
 		config |= MACB_BIT(CAF);	/* Copy All Frames */
 	if (!(bp->dev->flags & IFF_BROADCAST))
@@ -882,15 +886,15 @@ static int hash_get_index(__u8 *addr)
  */
 static void macb_sethashtable(struct net_device *dev)
 {
-	struct dev_mc_list *curr;
+	struct netdev_hw_addr *ha;
 	unsigned long mc_filter[2];
 	unsigned int bitnr;
 	struct macb *bp = netdev_priv(dev);
 
 	mc_filter[0] = mc_filter[1] = 0;
 
-	netdev_for_each_mc_addr(curr, dev) {
-		bitnr = hash_get_index(curr->dmi_addr);
+	netdev_for_each_mc_addr(ha, dev) {
+		bitnr = hash_get_index(ha->addr);
 		mc_filter[bitnr >> 5] |= 1 << (bitnr & 31);
 	}
 
@@ -1083,7 +1087,7 @@ static int macb_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 	if (!phydev)
 		return -ENODEV;
 
-	return phy_mii_ioctl(phydev, if_mii(rq), cmd);
+	return phy_mii_ioctl(phydev, rq, cmd);
 }
 
 static const struct net_device_ops macb_netdev_ops = {

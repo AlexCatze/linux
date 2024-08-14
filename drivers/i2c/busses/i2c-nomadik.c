@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009 ST-Ericsson
+ * Copyright (C) 2009 ST-Ericsson SA
  * Copyright (C) 2009 STMicroelectronics
  *
  * I2C master mode controller driver, used in Nomadik 8815
@@ -103,6 +103,9 @@
 /* maximum threshold value */
 #define MAX_I2C_FIFO_THRESHOLD	15
 
+/* per-transfer delay, required for the hardware to stabilize */
+#define I2C_DELAY		150
+
 enum i2c_status {
 	I2C_NOP,
 	I2C_ON_GOING,
@@ -118,14 +121,14 @@ enum i2c_operation {
 };
 
 /* controller response timeout in ms */
-#define I2C_TIMEOUT_MS	500
+#define I2C_TIMEOUT_MS	2000
 
 /**
  * struct i2c_nmk_client - client specific data
  * @slave_adr: 7-bit slave address
- * @count: no. bytes to be transfered
+ * @count: no. bytes to be transferred
  * @buffer: client data buffer
- * @xfer_bytes: bytes transfered till now
+ * @xfer_bytes: bytes transferred till now
  * @operation: current I2C operation
  */
 struct i2c_nmk_client {
@@ -250,6 +253,8 @@ static int init_hw(struct nmk_i2c_dev *dev)
 {
 	int stat;
 
+	clk_enable(dev->clk);
+
 	stat = flush_i2c_fifo(dev);
 	if (stat)
 		return stat;
@@ -263,6 +268,9 @@ static int init_hw(struct nmk_i2c_dev *dev)
 
 	dev->cli.operation = I2C_NO_OPERATION;
 
+	clk_disable(dev->clk);
+
+	udelay(I2C_DELAY);
 	return 0;
 }
 
@@ -322,7 +330,7 @@ static void setup_i2c_controller(struct nmk_i2c_dev *dev)
 	 * slsu defines the data setup time after SCL clock
 	 * stretching in terms of i2c clk cycles. The
 	 * needed setup time for the three modes are 250ns,
-	 * 100ns, 10ns repectively thus leading to the values
+	 * 100ns, 10ns respectively thus leading to the values
 	 * of 14, 6, 2 for a 48 MHz i2c clk.
 	 */
 	writel(dev->cfg.slsu << 16, dev->virtbase + I2C_SCR);
@@ -356,7 +364,7 @@ static void setup_i2c_controller(struct nmk_i2c_dev *dev)
 	/*
 	 * set the speed mode. Currently we support
 	 * only standard and fast mode of operation
-	 * TODO - support for fast mode plus (upto 1Mb/s)
+	 * TODO - support for fast mode plus (up to 1Mb/s)
 	 * and high speed (up to 3.4 Mb/s)
 	 */
 	if (dev->cfg.sm > I2C_FREQ_MODE_FAST) {
@@ -426,12 +434,11 @@ static int read_i2c(struct nmk_i2c_dev *dev)
 	}
 
 	if (timeout == 0) {
-		/* controler has timedout, re-init the h/w */
+		/* controller has timedout, re-init the h/w */
 		dev_err(&dev->pdev->dev, "controller timed out, re-init h/w\n");
 		(void) init_hw(dev);
 		status = -ETIMEDOUT;
 	}
-
 	return status;
 }
 
@@ -491,7 +498,7 @@ static int write_i2c(struct nmk_i2c_dev *dev)
 	}
 
 	if (timeout == 0) {
-		/* controler has timedout, re-init the h/w */
+		/* controller has timedout, re-init the h/w */
 		dev_err(&dev->pdev->dev, "controller timed out, re-init h/w\n");
 		(void) init_hw(dev);
 		status = -ETIMEDOUT;
@@ -502,9 +509,9 @@ static int write_i2c(struct nmk_i2c_dev *dev)
 
 /**
  * nmk_i2c_xfer() - I2C transfer function used by kernel framework
- * @i2c_adap 	- Adapter pointer to the controller
- * @msgs[] - Pointer to data to be written.
- * @num_msgs - Number of messages to be executed
+ * @i2c_adap: Adapter pointer to the controller
+ * @msgs: Pointer to data to be written.
+ * @num_msgs: Number of messages to be executed
  *
  * This is the function called by the generic kernel i2c_transfer()
  * or i2c_smbus...() API calls. Note that this code is protected by the
@@ -559,6 +566,8 @@ static int nmk_i2c_xfer(struct i2c_adapter *i2c_adap,
 	if (status)
 		return status;
 
+	clk_enable(dev->clk);
+
 	/* setup the i2c controller */
 	setup_i2c_controller(dev);
 
@@ -591,10 +600,13 @@ static int nmk_i2c_xfer(struct i2c_adapter *i2c_adap,
 			dev_err(&dev->pdev->dev, "%s\n",
 				cause >= ARRAY_SIZE(abort_causes)
 				? "unknown reason" : abort_causes[cause]);
+			clk_disable(dev->clk);
 			return status;
 		}
-		mdelay(1);
+		udelay(I2C_DELAY);
 	}
+	clk_disable(dev->clk);
+
 	/* return the no. messages processed */
 	if (status)
 		return status;
@@ -605,6 +617,7 @@ static int nmk_i2c_xfer(struct i2c_adapter *i2c_adap,
 /**
  * disable_interrupts() - disable the interrupts
  * @dev: private data of controller
+ * @irq: interrupt number
  */
 static int disable_interrupts(struct nmk_i2c_dev *dev, u32 irq)
 {
@@ -704,7 +717,8 @@ static irqreturn_t i2c_irq_handler(int irq, void *arg)
 	case I2C_IT_MTD:
 	case I2C_IT_MTDWS:
 		if (dev->cli.operation == I2C_READ) {
-			while (!readl(dev->virtbase + I2C_RISR) & I2C_IT_RXFE) {
+			while (!(readl(dev->virtbase + I2C_RISR)
+				 & I2C_IT_RXFE)) {
 				if (dev->cli.count == 0)
 					break;
 				*dev->cli.buffer =
@@ -793,10 +807,7 @@ static irqreturn_t i2c_irq_handler(int irq, void *arg)
 
 static unsigned int nmk_i2c_functionality(struct i2c_adapter *adap)
 {
-	return I2C_FUNC_I2C
-		| I2C_FUNC_SMBUS_BYTE_DATA
-		| I2C_FUNC_SMBUS_WORD_DATA
-		| I2C_FUNC_SMBUS_I2C_BLOCK;
+	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL;
 }
 
 static const struct i2c_algorithm nmk_i2c_algo = {
@@ -856,13 +867,13 @@ static int __devinit nmk_i2c_probe(struct platform_device *pdev)
 		goto err_no_clk;
 	}
 
-	clk_enable(dev->clk);
-
 	adap = &dev->adap;
 	adap->dev.parent = &pdev->dev;
 	adap->owner	= THIS_MODULE;
 	adap->class	= I2C_CLASS_HWMON | I2C_CLASS_SPD;
 	adap->algo	= &nmk_i2c_algo;
+	snprintf(adap->name, sizeof(adap->name),
+		 "Nomadik I2C%d at %lx", pdev->id, (unsigned long)res->start);
 
 	/* fetch the controller id */
 	adap->nr	= pdev->id;
@@ -882,8 +893,8 @@ static int __devinit nmk_i2c_probe(struct platform_device *pdev)
 		goto err_init_hw;
 	}
 
-	dev_dbg(&pdev->dev, "initialize I2C%d bus on virtual "
-		"base %p\n", pdev->id, dev->virtbase);
+	dev_info(&pdev->dev, "initialize %s on virtual "
+		"base %p\n", adap->name, dev->virtbase);
 
 	ret = i2c_add_numbered_adapter(adap);
 	if (ret) {
@@ -894,7 +905,6 @@ static int __devinit nmk_i2c_probe(struct platform_device *pdev)
 	return 0;
 
  err_init_hw:
-	clk_disable(dev->clk);
  err_add_adap:
 	clk_put(dev->clk);
  err_no_clk:
@@ -914,6 +924,7 @@ static int __devinit nmk_i2c_probe(struct platform_device *pdev)
 
 static int __devexit nmk_i2c_remove(struct platform_device *pdev)
 {
+	struct resource *res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	struct nmk_i2c_dev *dev = platform_get_drvdata(pdev);
 
 	i2c_del_adapter(&dev->adap);
@@ -924,7 +935,8 @@ static int __devexit nmk_i2c_remove(struct platform_device *pdev)
 	i2c_clr_bit(dev->virtbase + I2C_CR, I2C_CR_PE);
 	free_irq(dev->irq, dev);
 	iounmap(dev->virtbase);
-	clk_disable(dev->clk);
+	if (res)
+		release_mem_region(res->start, resource_size(res));
 	clk_put(dev->clk);
 	platform_set_drvdata(pdev, NULL);
 	kfree(dev);

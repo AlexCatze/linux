@@ -294,11 +294,6 @@ config X86_GENERIC
 
 endif
 
-config X86_CPU
-	def_bool y
-	select GENERIC_FIND_FIRST_BIT
-	select GENERIC_FIND_NEXT_BIT
-
 #
 # Define implied options from the CPU selection here
 config X86_INTERNODE_CACHE_SHIFT
@@ -308,6 +303,9 @@ config X86_INTERNODE_CACHE_SHIFT
 	default X86_L1_CACHE_SHIFT
 
 config X86_CMPXCHG
+	def_bool X86_64 || (X86_32 && !M386)
+
+config CMPXCHG_LOCAL
 	def_bool X86_64 || (X86_32 && !M386)
 
 config X86_L1_CACHE_SHIFT
@@ -328,7 +326,7 @@ config X86_PPRO_FENCE
 	  Old PentiumPro multiprocessor systems had errata that could cause
 	  memory operations to violate the x86 ordering standard in rare cases.
 	  Enabling this option will attempt to work around some (but not all)
-	  occurances of this problem, at the cost of much heavier spinlock and
+	  occurrences of this problem, at the cost of much heavier spinlock and
 	  memory barrier operations.
 
 	  If unsure, say n here. Even distro kernels should think twice before
@@ -337,6 +335,10 @@ config X86_PPRO_FENCE
 config X86_F00F_BUG
 	def_bool y
 	depends on M586MMX || M586TSC || M586 || M486 || M386
+
+config X86_INVD_BUG
+	def_bool y
+	depends on M486 || M386
 
 config X86_WP_WORKS_OK
 	def_bool y
@@ -364,7 +366,7 @@ config X86_INTEL_USERCOPY
 
 config X86_USE_PPRO_CHECKSUM
 	def_bool y
-	depends on MWINCHIP3D || MWINCHIPC6 || MCYRIXIII || MK7 || MK6 || MPENTIUM4 || MPENTIUMM || MPENTIUMIII || MPENTIUMII || M686 || MK8 || MVIAC3_2 || MEFFICEON || MGEODE_LX || MCORE2 || MATOM
+	depends on MWINCHIP3D || MWINCHIPC6 || MCYRIXIII || MK7 || MK6 || MPENTIUM4 || MPENTIUMM || MPENTIUMIII || MPENTIUMII || M686 || MK8 || MVIAC3_2 || MVIAC7 || MEFFICEON || MGEODE_LX || MCORE2 || MATOM
 
 config X86_USE_3DNOW
 	def_bool y
@@ -417,7 +419,7 @@ config X86_DEBUGCTLMSR
 	depends on !(MK6 || MWINCHIPC6 || MWINCHIP3D || MCYRIXIII || M586MMX || M586TSC || M586 || M486 || M386) && !UML
 
 menuconfig PROCESSOR_SELECT
-	bool "Supported processor vendors" if EMBEDDED
+	bool "Supported processor vendors" if EXPERT
 	---help---
 	  This lets you choose what x86 vendor support code your kernel
 	  will include.
@@ -502,23 +504,3 @@ config CPU_SUP_UMC_32
 	  CPU might render the kernel unbootable.
 
 	  If unsure, say N.
-
-config X86_DS
-	def_bool X86_PTRACE_BTS
-	depends on X86_DEBUGCTLMSR
-	select HAVE_HW_BRANCH_TRACER
-
-config X86_PTRACE_BTS
-	bool "Branch Trace Store"
-	default y
-	depends on X86_DEBUGCTLMSR
-	depends on BROKEN
-	---help---
-	  This adds a ptrace interface to the hardware's branch trace store.
-
-	  Debuggers may use it to collect an execution trace of the debugged
-	  application in order to answer the question 'how did I get here?'.
-	  Debuggers may trace user mode as well as kernel mode.
-
-	  Say Y unless there is no application development on this machine
-	  and you want to save a small amount of code size.

@@ -77,6 +77,7 @@ struct vf_data_storage {
 	unsigned long last_nack;
 	u16 pf_vlan; /* When set, guest VLAN config not allowed. */
 	u16 pf_qos;
+	u16 tx_rate;
 };
 
 #define IGB_VF_FLAG_CTS            0x00000001 /* VF is clear to send data */
@@ -107,6 +108,7 @@ struct vf_data_storage {
 #define MAXIMUM_ETHERNET_VLAN_SIZE 1522
 
 /* Supported Rx Buffer Sizes */
+#define IGB_RXBUFFER_64    64     /* Used for packet split */
 #define IGB_RXBUFFER_128   128    /* Used for packet split */
 #define IGB_RXBUFFER_1024  1024
 #define IGB_RXBUFFER_2048  2048
@@ -140,8 +142,10 @@ struct igb_buffer {
 			unsigned long time_stamp;
 			u16 length;
 			u16 next_to_watch;
-			u16 mapped_as_page;
+			unsigned int bytecount;
 			u16 gso_segs;
+			u8 tx_flags;
+			u8 mapped_as_page;
 		};
 		/* RX */
 		struct {
@@ -156,6 +160,7 @@ struct igb_tx_queue_stats {
 	u64 packets;
 	u64 bytes;
 	u64 restart_queue;
+	u64 restart_queue2;
 };
 
 struct igb_rx_queue_stats {
@@ -185,7 +190,7 @@ struct igb_q_vector {
 struct igb_ring {
 	struct igb_q_vector *q_vector; /* backlink to q_vector */
 	struct net_device *netdev;     /* back pointer to net_device */
-	struct pci_dev *pdev;          /* pci device for dma mapping */
+	struct device *dev;            /* device pointer for dma mapping */
 	dma_addr_t dma;                /* phys address of the ring */
 	void *desc;                    /* descriptor ring memory */
 	unsigned int size;             /* length of desc. ring in bytes */
@@ -207,11 +212,14 @@ struct igb_ring {
 		/* TX */
 		struct {
 			struct igb_tx_queue_stats tx_stats;
+			struct u64_stats_sync tx_syncp;
+			struct u64_stats_sync tx_syncp2;
 			bool detect_tx_hung;
 		};
 		/* RX */
 		struct {
 			struct igb_rx_queue_stats rx_stats;
+			struct u64_stats_sync rx_syncp;
 			u32 rx_buffer_len;
 		};
 	};
@@ -285,6 +293,9 @@ struct igb_adapter {
 	struct timecompare compare;
 	struct hwtstamp_config hwtstamp_config;
 
+	spinlock_t stats64_lock;
+	struct rtnl_link_stats64 stats64;
+
 	/* structs defined in e1000_hw.h */
 	struct e1000_hw hw;
 	struct e1000_hw_stats stats;
@@ -313,16 +324,25 @@ struct igb_adapter {
 	u16 rx_ring_count;
 	unsigned int vfs_allocated_count;
 	struct vf_data_storage *vf_data;
+	int vf_rate_link_speed;
 	u32 rss_queues;
+	u32 wvbr;
 };
 
 #define IGB_FLAG_HAS_MSI           (1 << 0)
 #define IGB_FLAG_DCA_ENABLED       (1 << 1)
 #define IGB_FLAG_QUAD_PORT_A       (1 << 2)
 #define IGB_FLAG_QUEUE_PAIRS       (1 << 3)
+#define IGB_FLAG_DMAC              (1 << 4)
+
+/* DMA Coalescing defines */
+#define IGB_MIN_TXPBSIZE           20408
+#define IGB_TX_BUF_4096            4096
+#define IGB_DMCTLX_DCFLUSH_DIS     0x80000000  /* Disable DMA Coal Flush */
 
 #define IGB_82576_TSYNC_SHIFT 19
 #define IGB_82580_TSYNC_SHIFT 24
+#define IGB_TS_HDR_LEN        16
 enum e1000_state_t {
 	__IGB_TESTING,
 	__IGB_RESETTING,
@@ -336,7 +356,6 @@ enum igb_boards {
 extern char igb_driver_name[];
 extern char igb_driver_version[];
 
-extern char *igb_get_hw_dev_name(struct e1000_hw *hw);
 extern int igb_up(struct igb_adapter *);
 extern void igb_down(struct igb_adapter *);
 extern void igb_reinit_locked(struct igb_adapter *);
@@ -354,7 +373,7 @@ extern netdev_tx_t igb_xmit_frame_ring_adv(struct sk_buff *, struct igb_ring *);
 extern void igb_unmap_and_free_tx_resource(struct igb_ring *,
 					   struct igb_buffer *);
 extern void igb_alloc_rx_buffers_adv(struct igb_ring *, int);
-extern void igb_update_stats(struct igb_adapter *);
+extern void igb_update_stats(struct igb_adapter *, struct rtnl_link_stats64 *);
 extern bool igb_has_link(struct igb_adapter *adapter);
 extern void igb_set_ethtool_ops(struct net_device *);
 extern void igb_power_up_link(struct igb_adapter *);

@@ -59,6 +59,7 @@ enum {
  * @new_size: truncation new size
  * @free: amount of free space in a bud
  * @dirty: amount of dirty space in a bud from padding and deletion nodes
+ * @jhead: journal head number of the bud
  *
  * UBIFS journal replay must compare node sequence numbers, which means it must
  * build a tree of node information to insert into the TNC.
@@ -80,6 +81,7 @@ struct replay_entry {
 		struct {
 			int free;
 			int dirty;
+			int jhead;
 		};
 	};
 };
@@ -159,6 +161,11 @@ static int set_bud_lprops(struct ubifs_info *c, struct replay_entry *r)
 		err = PTR_ERR(lp);
 		goto out;
 	}
+
+	/* Make sure the journal head points to the latest bud */
+	err = ubifs_wbuf_seek_nolock(&c->jheads[r->jhead].wbuf, r->lnum,
+				     c->leb_size - r->free, UBI_SHORTTERM);
+
 out:
 	ubifs_release_lprops(c);
 	return err;
@@ -627,11 +634,6 @@ static int replay_bud(struct ubifs_info *c, int lnum, int offs, int jhead,
 	ubifs_assert(sleb->endpt - offs >= used);
 	ubifs_assert(sleb->endpt % c->min_io_size == 0);
 
-	if (sleb->endpt + c->min_io_size <= c->leb_size &&
-	    !(c->vfs_sb->s_flags & MS_RDONLY))
-		err = ubifs_wbuf_seek_nolock(&c->jheads[jhead].wbuf, lnum,
-					     sleb->endpt, UBI_SHORTTERM);
-
 	*dirty = sleb->endpt - offs - used;
 	*free = c->leb_size - sleb->endpt;
 
@@ -654,12 +656,14 @@ out_dump:
  * @sqnum: sequence number
  * @free: amount of free space in bud
  * @dirty: amount of dirty space from padding and deletion nodes
+ * @jhead: journal head number for the bud
  *
  * This function inserts a reference node to the replay tree and returns zero
  * in case of success or a negative error code in case of failure.
  */
 static int insert_ref_node(struct ubifs_info *c, int lnum, int offs,
-			   unsigned long long sqnum, int free, int dirty)
+			   unsigned long long sqnum, int free, int dirty,
+			   int jhead)
 {
 	struct rb_node **p = &c->replay_tree.rb_node, *parent = NULL;
 	struct replay_entry *r;
@@ -689,6 +693,7 @@ static int insert_ref_node(struct ubifs_info *c, int lnum, int offs,
 	r->flags = REPLAY_REF;
 	r->free = free;
 	r->dirty = dirty;
+	r->jhead = jhead;
 
 	rb_link_node(&r->rb, parent, p);
 	rb_insert_color(&r->rb, &c->replay_tree);
@@ -713,7 +718,7 @@ static int replay_buds(struct ubifs_info *c)
 		if (err)
 			return err;
 		err = insert_ref_node(c, b->bud->lnum, b->bud->start, b->sqnum,
-				      free, dirty);
+				      free, dirty, b->bud->jhead);
 		if (err)
 			return err;
 	}
@@ -840,6 +845,11 @@ static int replay_log_leb(struct ubifs_info *c, int lnum, int offs, void *sbuf)
 	if (IS_ERR(sleb)) {
 		if (PTR_ERR(sleb) != -EUCLEAN || !c->need_recovery)
 			return PTR_ERR(sleb);
+		/*
+		 * Note, the below function will recover this log LEB only if
+		 * it is the last, because unclean reboots can possibly corrupt
+		 * only the tail of the log.
+		 */
 		sleb = ubifs_recover_log_leb(c, lnum, offs, sbuf);
 		if (IS_ERR(sleb))
 			return PTR_ERR(sleb);
@@ -851,7 +861,6 @@ static int replay_log_leb(struct ubifs_info *c, int lnum, int offs, void *sbuf)
 	}
 
 	node = sleb->buf;
-
 	snod = list_entry(sleb->nodes.next, struct ubifs_scan_node, list);
 	if (c->cs_sqnum == 0) {
 		/*
@@ -898,7 +907,6 @@ static int replay_log_leb(struct ubifs_info *c, int lnum, int offs, void *sbuf)
 	}
 
 	list_for_each_entry(snod, &sleb->nodes, list) {
-
 		cond_resched();
 
 		if (snod->sqnum >= SQNUM_WATERMARK) {
@@ -1011,7 +1019,6 @@ out:
 int ubifs_replay_journal(struct ubifs_info *c)
 {
 	int err, i, lnum, offs, free;
-	void *sbuf = NULL;
 
 	BUILD_BUG_ON(UBIFS_TRUN_KEY > 5);
 
@@ -1026,14 +1033,8 @@ int ubifs_replay_journal(struct ubifs_info *c)
 		return -EINVAL;
 	}
 
-	sbuf = vmalloc(c->leb_size);
-	if (!sbuf)
-		return -ENOMEM;
-
 	dbg_mnt("start replaying the journal");
-
 	c->replaying = 1;
-
 	lnum = c->ltail_lnum = c->lhead_lnum;
 	offs = c->lhead_offs;
 
@@ -1046,7 +1047,7 @@ int ubifs_replay_journal(struct ubifs_info *c)
 			lnum = UBIFS_LOG_LNUM;
 			offs = 0;
 		}
-		err = replay_log_leb(c, lnum, offs, sbuf);
+		err = replay_log_leb(c, lnum, offs, c->sbuf);
 		if (err == 1)
 			/* We hit the end of the log */
 			break;
@@ -1079,7 +1080,6 @@ int ubifs_replay_journal(struct ubifs_info *c)
 out:
 	destroy_replay_tree(c);
 	destroy_bud_list(c);
-	vfree(sbuf);
 	c->replaying = 0;
 	return err;
 }

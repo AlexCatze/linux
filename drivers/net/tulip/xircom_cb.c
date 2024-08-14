@@ -29,7 +29,6 @@
 #include <linux/skbuff.h>
 #include <linux/delay.h>
 #include <linux/init.h>
-#include <linux/ethtool.h>
 #include <linux/bitops.h>
 
 #include <asm/uaccess.h>
@@ -181,19 +180,6 @@ static void print_binary(unsigned int number)
 }
 #endif
 
-static void netdev_get_drvinfo(struct net_device *dev,
-			       struct ethtool_drvinfo *info)
-{
-	struct xircom_private *private = netdev_priv(dev);
-
-	strcpy(info->driver, "xircom_cb");
-	strcpy(info->bus_info, pci_name(private->pdev));
-}
-
-static const struct ethtool_ops netdev_ethtool_ops = {
-	.get_drvinfo		= netdev_get_drvinfo,
-};
-
 static const struct net_device_ops netdev_ops = {
 	.ndo_open		= xircom_open,
 	.ndo_stop		= xircom_close,
@@ -279,7 +265,6 @@ static int __devinit xircom_probe(struct pci_dev *pdev, const struct pci_device_
 	setup_descriptors(private);
 
 	dev->netdev_ops = &netdev_ops;
-	SET_ETHTOOL_OPS(dev, &netdev_ethtool_ops);
 	pci_set_drvdata(pdev, dev);
 
 	if (register_netdev(dev)) {
@@ -350,9 +335,9 @@ static irqreturn_t xircom_interrupt(int irq, void *dev_instance)
 
 #ifdef DEBUG
 	print_binary(status);
-	printk("tx status 0x%08x 0x%08x \n",
+	printk("tx status 0x%08x 0x%08x\n",
 	       card->tx_buffer[0], card->tx_buffer[4]);
-	printk("rx status 0x%08x 0x%08x \n",
+	printk("rx status 0x%08x 0x%08x\n",
 	       card->rx_buffer[0], card->rx_buffer[4]);
 #endif
 	/* Handle shared irq and hotplug */
@@ -462,7 +447,7 @@ static int xircom_open(struct net_device *dev)
 	struct xircom_private *xp = netdev_priv(dev);
 	int retval;
 	enter("xircom_open");
-	pr_info("xircom cardbus adaptor found, registering as %s, using irq %i \n",
+	pr_info("xircom cardbus adaptor found, registering as %s, using irq %i\n",
 		dev->name, dev->irq);
 	retval = request_irq(dev->irq, xircom_interrupt, IRQF_SHARED, dev->name, dev);
 	if (retval) {

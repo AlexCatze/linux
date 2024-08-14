@@ -36,15 +36,16 @@ extern void cpu_die(void);
 
 extern void smp_send_debugger_break(int cpu);
 extern void smp_message_recv(int);
+extern void start_secondary_resume(void);
 
 DECLARE_PER_CPU(unsigned int, cpu_pvr);
 
 #ifdef CONFIG_HOTPLUG_CPU
-extern void fixup_irqs(cpumask_t map);
+extern void migrate_irqs(void);
 int generic_cpu_disable(void);
-int generic_cpu_enable(unsigned int cpu);
 void generic_cpu_die(unsigned int cpu);
 void generic_mach_cpu_die(void);
+void generic_set_cpu_dead(unsigned int cpu);
 #endif
 
 #ifdef CONFIG_PPC64
@@ -68,8 +69,19 @@ static inline void set_hard_smp_processor_id(int cpu, int phys)
 }
 #endif
 
-DECLARE_PER_CPU(cpumask_t, cpu_sibling_map);
-DECLARE_PER_CPU(cpumask_t, cpu_core_map);
+DECLARE_PER_CPU(cpumask_var_t, cpu_sibling_map);
+DECLARE_PER_CPU(cpumask_var_t, cpu_core_map);
+
+static inline struct cpumask *cpu_sibling_mask(int cpu)
+{
+	return per_cpu(cpu_sibling_map, cpu);
+}
+
+static inline struct cpumask *cpu_core_mask(int cpu)
+{
+	return per_cpu(cpu_core_map, cpu);
+}
+
 extern int cpu_to_core_id(int cpu);
 
 /* Since OpenPIC has only 4 IPIs, we use slightly different message numbers.
@@ -93,7 +105,6 @@ void smp_init_pSeries(void);
 void smp_init_cell(void);
 void smp_init_celleb(void);
 void smp_setup_cpu_maps(void);
-void smp_setup_cpu_sibling_map(void);
 
 extern int __cpu_disable(void);
 extern void __cpu_die(unsigned int cpu);

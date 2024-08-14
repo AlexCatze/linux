@@ -213,6 +213,7 @@ enum {
 	 IWL_CCK_BASIC_RATES_MASK)
 
 #define IWL_RATES_MASK ((1 << IWL_RATE_COUNT) - 1)
+#define IWL_RATES_MASK_3945 ((1 << IWL_RATE_COUNT_3945) - 1)
 
 #define IWL_INVALID_VALUE    -1
 
@@ -299,7 +300,6 @@ enum {
 #define TIME_WRAP_AROUND(x, y) (((y) > (x)) ? (y) - (x) : (0-(x)) + (y))
 
 extern const struct iwl_rate_info iwl_rates[IWL_RATE_COUNT];
-extern const struct iwl3945_rate_info iwl3945_rates[IWL_RATE_COUNT_3945];
 
 enum iwl_table_type {
 	LQ_NONE,
@@ -403,7 +403,6 @@ struct iwl_lq_sta {
 	u8 is_green;
 	u8 is_dup;
 	enum ieee80211_band band;
-	u8 ibss_sta_added;
 
 	/* The following are bitmaps of rates; IWL_RATE_6M_MASK, etc. */
 	u32 supp_rates;
@@ -411,7 +410,6 @@ struct iwl_lq_sta {
 	u16 active_siso_rate;
 	u16 active_mimo2_rate;
 	u16 active_mimo3_rate;
-	u16 active_rate_basic;
 	s8 max_rate_idx;     /* Max rate set by user */
 	u8 missed_rate_counter;
 
@@ -434,6 +432,8 @@ struct iwl_lq_sta {
 	u32 last_rate_n_flags;
 	/* packets destined for this STA are aggregated */
 	u8 is_agg;
+	/* BT traffic this sta was last updated in */
+	u8 last_bt_traffic;
 };
 
 static inline u8 num_of_ant(u8 mask)
@@ -453,24 +453,6 @@ static inline u8 first_antenna(u8 mask)
 }
 
 
-static inline u8 iwl_get_prev_ieee_rate(u8 rate_index)
-{
-	u8 rate = iwl_rates[rate_index].prev_ieee;
-
-	if (rate == IWL_RATE_INVALID)
-		rate = rate_index;
-	return rate;
-}
-
-static inline u8 iwl3945_get_prev_ieee_rate(u8 rate_index)
-{
-	u8 rate = iwl3945_rates[rate_index].prev_ieee;
-
-	if (rate == IWL_RATE_INVALID)
-		rate = rate_index;
-	return rate;
-}
-
 /**
  * iwl3945_rate_scale_init - Initialize the rate scale table based on assoc info
  *
@@ -478,6 +460,12 @@ static inline u8 iwl3945_get_prev_ieee_rate(u8 rate_index)
  * the associated with, including A, B, G, and G w/ TGG protection
  */
 extern void iwl3945_rate_scale_init(struct ieee80211_hw *hw, s32 sta_id);
+
+/* Initialize station's rate scaling information after adding station */
+extern void iwl_rs_rate_init(struct iwl_priv *priv,
+			     struct ieee80211_sta *sta, u8 sta_id);
+extern void iwl3945_rs_rate_init(struct iwl_priv *priv,
+				 struct ieee80211_sta *sta, u8 sta_id);
 
 /**
  * iwl_rate_control_register - Register the rate control algorithm callbacks

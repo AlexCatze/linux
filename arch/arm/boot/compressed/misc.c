@@ -28,9 +28,6 @@ unsigned int __machine_arch_type;
 
 #include <asm/unaligned.h>
 
-#ifdef STANDALONE_DEBUG
-#define putstr printf
-#else
 
 static void putstr(const char *ptr);
 extern void error(char *x);
@@ -39,7 +36,7 @@ extern void error(char *x);
 
 #ifdef CONFIG_DEBUG_ICEDCC
 
-#ifdef CONFIG_CPU_V6
+#if defined(CONFIG_CPU_V6) || defined(CONFIG_CPU_V6K) || defined(CONFIG_CPU_V7)
 
 static void icedcc_putc(int ch)
 {
@@ -55,16 +52,6 @@ static void icedcc_putc(int ch)
 	asm("mcr p14, 0, %0, c0, c5, 0" : : "r" (ch));
 }
 
-#elif defined(CONFIG_CPU_V7)
-
-static void icedcc_putc(int ch)
-{
-	asm(
-	"wait:	mrc	p14, 0, pc, c0, c1, 0			\n\
-		bcs	wait					\n\
-		mcr     p14, 0, %0, c0, c5, 0			"
-	: : "r" (ch));
-}
 
 #elif defined(CONFIG_CPU_XSCALE)
 
@@ -116,7 +103,6 @@ static void putstr(const char *ptr)
 	flush();
 }
 
-#endif
 
 void *memcpy(void *__dest, __const void *__src, size_t __n)
 {
@@ -186,7 +172,6 @@ asmlinkage void __div0(void)
 
 extern void do_decompress(u8 *input, int len, u8 *output, void (*error)(char *x));
 
-#ifndef STANDALONE_DEBUG
 
 unsigned long
 decompress_kernel(unsigned long output_start, unsigned long free_mem_ptr_p,
@@ -211,18 +196,3 @@ decompress_kernel(unsigned long output_start, unsigned long free_mem_ptr_p,
 	putstr(" done, booting the kernel.\n");
 	return output_ptr;
 }
-#else
-
-char output_buffer[1500*1024];
-
-int main()
-{
-	output_data = output_buffer;
-
-	putstr("Uncompressing Linux...");
-	decompress(input_data, input_data_end - input_data,
-			NULL, NULL, output_data, NULL, error);
-	putstr("done.\n");
-	return 0;
-}
-#endif

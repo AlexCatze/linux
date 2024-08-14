@@ -48,15 +48,10 @@ SECTIONS
 #if !L1_CODE_LENGTH
 		*(.l1.text)
 #endif
-
-		. = ALIGN(16);
-		___start___ex_table = .;
-		*(__ex_table)
-		___stop___ex_table = .;
-
 		__etext = .;
 	}
 
+	EXCEPTION_TABLE(4)
 	NOTES
 
 	/* Just in case the first read only is a 32-bit access */
@@ -141,7 +136,7 @@ SECTIONS
 
 	. = ALIGN(16);
 	INIT_DATA_SECTION(16)
-	PERCPU(4)
+	PERCPU(32, PAGE_SIZE)
 
 	.exit.data :
 	{
@@ -181,6 +176,7 @@ SECTIONS
 	{
 		. = ALIGN(4);
 		__stext_l1 = .;
+		*(.l1.text.head)
 		*(.l1.text)
 #ifdef CONFIG_SCHEDULE_L1
 		SCHED_TEXT

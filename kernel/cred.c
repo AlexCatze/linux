@@ -17,16 +17,11 @@
 #include <linux/init_task.h>
 #include <linux/security.h>
 #include <linux/cn_proc.h>
-#include "cred-internals.h"
 
 #if 0
 #define kdebug(FMT, ...) \
 	printk("[%-5.5s%5u] "FMT"\n", current->comm, current->pid ,##__VA_ARGS__)
 #else
-static inline __attribute__((format(printf, 1, 2)))
-void no_printk(const char *fmt, ...)
-{
-}
 #define kdebug(FMT, ...) \
 	no_printk("[%-5.5s%5u] "FMT"\n", current->comm, current->pid ,##__VA_ARGS__)
 #endif
@@ -40,7 +35,7 @@ static struct kmem_cache *cred_jar;
 static struct thread_group_cred init_tgcred = {
 	.usage	= ATOMIC_INIT(2),
 	.tgid	= 0,
-	.lock	= SPIN_LOCK_UNLOCKED,
+	.lock	= __SPIN_LOCK_UNLOCKED(init_cred.tgcred.lock),
 };
 #endif
 
@@ -59,6 +54,7 @@ struct cred init_cred = {
 	.cap_effective		= CAP_INIT_EFF_SET,
 	.cap_bset		= CAP_INIT_BSET,
 	.user			= INIT_USER,
+	.user_ns		= &init_user_ns,
 	.group_info		= &init_groups,
 #ifdef CONFIG_KEYS
 	.tgcred			= &init_tgcred,
@@ -210,6 +206,31 @@ void exit_creds(struct task_struct *tsk)
 	}
 }
 
+/**
+ * get_task_cred - Get another task's objective credentials
+ * @task: The task to query
+ *
+ * Get the objective credentials of a task, pinning them so that they can't go
+ * away.  Accessing a task's credentials directly is not permitted.
+ *
+ * The caller must also make sure task doesn't get deleted, either by holding a
+ * ref on task or by holding tasklist_lock to prevent it from being unlinked.
+ */
+const struct cred *get_task_cred(struct task_struct *task)
+{
+	const struct cred *cred;
+
+	rcu_read_lock();
+
+	do {
+		cred = __task_cred((task));
+		BUG_ON(!cred);
+	} while (!atomic_inc_not_zero(&((struct cred *)cred)->usage));
+
+	rcu_read_unlock();
+	return cred;
+}
+
 /*
  * Allocate blank credentials, such that the credentials can be filled in at a
  * later date without risk of ENOMEM.
@@ -232,13 +253,13 @@ struct cred *cred_alloc_blank(void)
 #endif
 
 	atomic_set(&new->usage, 1);
+#ifdef CONFIG_DEBUG_CREDENTIALS
+	new->magic = CRED_MAGIC;
+#endif
 
 	if (security_cred_alloc_blank(new, GFP_KERNEL) < 0)
 		goto error;
 
-#ifdef CONFIG_DEBUG_CREDENTIALS
-	new->magic = CRED_MAGIC;
-#endif
 	return new;
 
 error:
@@ -305,7 +326,7 @@ EXPORT_SYMBOL(prepare_creds);
 
 /*
  * Prepare credentials for current to perform an execve()
- * - The caller must hold current->cred_guard_mutex
+ * - The caller must hold ->cred_guard_mutex
  */
 struct cred *prepare_exec_creds(void)
 {
@@ -348,66 +369,6 @@ struct cred *prepare_exec_creds(void)
 }
 
 /*
- * prepare new credentials for the usermode helper dispatcher
- */
-struct cred *prepare_usermodehelper_creds(void)
-{
-#ifdef CONFIG_KEYS
-	struct thread_group_cred *tgcred = NULL;
-#endif
-	struct cred *new;
-
-#ifdef CONFIG_KEYS
-	tgcred = kzalloc(sizeof(*new->tgcred), GFP_ATOMIC);
-	if (!tgcred)
-		return NULL;
-#endif
-
-	new = kmem_cache_alloc(cred_jar, GFP_ATOMIC);
-	if (!new)
-		goto free_tgcred;
-
-	kdebug("prepare_usermodehelper_creds() alloc %p", new);
-
-	memcpy(new, &init_cred, sizeof(struct cred));
-
-	atomic_set(&new->usage, 1);
-	set_cred_subscribers(new, 0);
-	get_group_info(new->group_info);
-	get_uid(new->user);
-
-#ifdef CONFIG_KEYS
-	new->thread_keyring = NULL;
-	new->request_key_auth = NULL;
-	new->jit_keyring = KEY_REQKEY_DEFL_DEFAULT;
-
-	atomic_set(&tgcred->usage, 1);
-	spin_lock_init(&tgcred->lock);
-	new->tgcred = tgcred;
-#endif
-
-#ifdef CONFIG_SECURITY
-	new->security = NULL;
-#endif
-	if (security_prepare_creds(new, &init_cred, GFP_ATOMIC) < 0)
-		goto error;
-	validate_creds(new);
-
-	BUG_ON(atomic_read(&new->usage) != 1);
-	return new;
-
-error:
-	put_cred(new);
-	return NULL;
-
-free_tgcred:
-#ifdef CONFIG_KEYS
-	kfree(tgcred);
-#endif
-	return NULL;
-}
-
-/*
  * Copy credentials for the new process created by fork()
  *
  * We share if we can, but under some circumstances we have to generate a new
@@ -423,8 +384,6 @@ int copy_creds(struct task_struct *p, unsigned long clone_flags)
 #endif
 	struct cred *new;
 	int ret;
-
-	mutex_init(&p->cred_guard_mutex);
 
 	if (
 #ifdef CONFIG_KEYS
@@ -451,6 +410,11 @@ int copy_creds(struct task_struct *p, unsigned long clone_flags)
 		if (ret < 0)
 			goto error_put;
 	}
+
+	/* cache user_ns in cred.  Doesn't need a refcount because it will
+	 * stay pinned by cred->user
+	 */
+	new->user_ns = new->user->user_ns;
 
 #ifdef CONFIG_KEYS
 	/* new threads get their own thread keyrings if their parent already
@@ -523,8 +487,6 @@ int commit_creds(struct cred *new)
 #endif
 	BUG_ON(atomic_read(&new->usage) < 1);
 
-	security_commit_creds(new, old);
-
 	get_cred(new); /* we will require a ref for the subj creds too */
 
 	/* dumpability changes */
@@ -559,8 +521,6 @@ int commit_creds(struct cred *new)
 	if (new->user != old->user)
 		atomic_dec(&old->user->processes);
 	alter_cred_subscribers(old, -2);
-
-	sched_switch_user(task);
 
 	/* send notifications */
 	if (new->uid   != old->uid  ||
@@ -703,6 +663,8 @@ struct cred *prepare_kernel_cred(struct task_struct *daemon)
 	validate_creds(old);
 
 	*new = *old;
+	atomic_set(&new->usage, 1);
+	set_cred_subscribers(new, 0);
 	get_uid(new->user);
 	get_group_info(new->group_info);
 
@@ -720,8 +682,6 @@ struct cred *prepare_kernel_cred(struct task_struct *daemon)
 	if (security_prepare_creds(new, old, GFP_KERNEL) < 0)
 		goto error;
 
-	atomic_set(&new->usage, 1);
-	set_cred_subscribers(new, 0);
 	put_cred(old);
 	validate_creds(new);
 	return new;
@@ -794,7 +754,11 @@ bool creds_are_invalid(const struct cred *cred)
 	if (cred->magic != CRED_MAGIC)
 		return true;
 #ifdef CONFIG_SECURITY_SELINUX
-	if (selinux_is_enabled()) {
+	/*
+	 * cred->security == NULL if security_cred_alloc_blank() or
+	 * security_prepare_creds() returned an error.
+	 */
+	if (selinux_is_enabled() && cred->security) {
 		if ((unsigned long) cred->security < PAGE_SIZE)
 			return true;
 		if ((*(u32 *)cred->security & 0xffffff00) ==

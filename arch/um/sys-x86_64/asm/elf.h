@@ -95,6 +95,10 @@ typedef struct user_i387_struct elf_fpregset_t;
 	(pr_reg)[25] = 0;					\
 	(pr_reg)[26] = 0;
 
+#define task_pt_regs(t) (&(t)->thread.regs)
+
+struct task_struct;
+
 extern int elf_core_copy_fpregs(struct task_struct *t, elf_fpregset_t *fpu);
 
 #define ELF_CORE_COPY_FPREGS(t, fpu) elf_core_copy_fpregs(t, fpu)

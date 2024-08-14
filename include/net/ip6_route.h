@@ -3,7 +3,6 @@
 
 #define IP6_RT_PRIO_USER	1024
 #define IP6_RT_PRIO_ADDRCONF	256
-#define IP6_RT_PRIO_KERN	512
 
 struct route_info {
 	__u8			type;
@@ -56,11 +55,23 @@ static inline unsigned int rt6_flags2srcprefs(int flags)
 	return (flags >> 3) & 7;
 }
 
+extern void			rt6_bind_peer(struct rt6_info *rt,
+					      int create);
+
+static inline struct inet_peer *rt6_get_peer(struct rt6_info *rt)
+{
+	if (rt->rt6i_peer)
+		return rt->rt6i_peer;
+
+	rt6_bind_peer(rt, 0);
+	return rt->rt6i_peer;
+}
+
 extern void			ip6_route_input(struct sk_buff *skb);
 
 extern struct dst_entry *	ip6_route_output(struct net *net,
-						 struct sock *sk,
-						 struct flowi *fl);
+						 const struct sock *sk,
+						 struct flowi6 *fl6);
 
 extern int			ip6_route_init(void);
 extern void			ip6_route_cleanup(void);
@@ -152,9 +163,9 @@ static inline void __ip6_dst_store(struct sock *sk, struct dst_entry *dst,
 static inline void ip6_dst_store(struct sock *sk, struct dst_entry *dst,
 				 struct in6_addr *daddr, struct in6_addr *saddr)
 {
-	write_lock(&sk->sk_dst_lock);
+	spin_lock(&sk->sk_dst_lock);
 	__ip6_dst_store(sk, dst, daddr, saddr);
-	write_unlock(&sk->sk_dst_lock);
+	spin_unlock(&sk->sk_dst_lock);
 }
 
 static inline int ipv6_unicast_destination(struct sk_buff *skb)
@@ -162,6 +173,16 @@ static inline int ipv6_unicast_destination(struct sk_buff *skb)
 	struct rt6_info *rt = (struct rt6_info *) skb_dst(skb);
 
 	return rt->rt6i_flags & RTF_LOCAL;
+}
+
+int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *));
+
+static inline int ip6_skb_dst_mtu(struct sk_buff *skb)
+{
+	struct ipv6_pinfo *np = skb->sk ? inet6_sk(skb->sk) : NULL;
+
+	return (np && np->pmtudisc == IPV6_PMTUDISC_PROBE) ?
+	       skb_dst(skb)->dev->mtu : dst_mtu(skb_dst(skb));
 }
 
 #endif

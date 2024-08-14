@@ -162,14 +162,14 @@ struct respQ_e {
  */
 struct cmdQ_ce {
 	struct sk_buff *skb;
-	DECLARE_PCI_UNMAP_ADDR(dma_addr);
-	DECLARE_PCI_UNMAP_LEN(dma_len);
+	DEFINE_DMA_UNMAP_ADDR(dma_addr);
+	DEFINE_DMA_UNMAP_LEN(dma_len);
 };
 
 struct freelQ_ce {
 	struct sk_buff *skb;
-	DECLARE_PCI_UNMAP_ADDR(dma_addr);
-	DECLARE_PCI_UNMAP_LEN(dma_len);
+	DEFINE_DMA_UNMAP_ADDR(dma_addr);
+	DEFINE_DMA_UNMAP_LEN(dma_len);
 };
 
 /*
@@ -271,6 +271,10 @@ struct sge {
 	struct sge_port_stats __percpu *port_stats[MAX_NPORTS];
 	struct sched	*tx_sched;
 	struct cmdQ cmdQ[SGE_CMDQ_N] ____cacheline_aligned_in_smp;
+};
+
+static const u8 ch_mac_addr[ETH_ALEN] = {
+	0x0, 0x7, 0x43, 0x0, 0x0, 0x0
 };
 
 /*
@@ -460,7 +464,7 @@ static struct sk_buff *sched_skb(struct sge *sge, struct sk_buff *skb,
 
 again:
 	for (i = 0; i < MAX_NPORTS; i++) {
-		s->port = ++s->port & (MAX_NPORTS - 1);
+		s->port = (s->port + 1) & (MAX_NPORTS - 1);
 		skbq = &s->p[s->port].skbq;
 
 		skb = skb_peek(skbq);
@@ -518,8 +522,8 @@ static void free_freelQ_buffers(struct pci_dev *pdev, struct freelQ *q)
 	while (q->credits--) {
 		struct freelQ_ce *ce = &q->centries[cidx];
 
-		pci_unmap_single(pdev, pci_unmap_addr(ce, dma_addr),
-				 pci_unmap_len(ce, dma_len),
+		pci_unmap_single(pdev, dma_unmap_addr(ce, dma_addr),
+				 dma_unmap_len(ce, dma_len),
 				 PCI_DMA_FROMDEVICE);
 		dev_kfree_skb(ce->skb);
 		ce->skb = NULL;
@@ -633,9 +637,9 @@ static void free_cmdQ_buffers(struct sge *sge, struct cmdQ *q, unsigned int n)
 	q->in_use -= n;
 	ce = &q->centries[cidx];
 	while (n--) {
-		if (likely(pci_unmap_len(ce, dma_len))) {
-			pci_unmap_single(pdev, pci_unmap_addr(ce, dma_addr),
-					 pci_unmap_len(ce, dma_len),
+		if (likely(dma_unmap_len(ce, dma_len))) {
+			pci_unmap_single(pdev, dma_unmap_addr(ce, dma_addr),
+					 dma_unmap_len(ce, dma_len),
 					 PCI_DMA_TODEVICE);
 			if (q->sop)
 				q->sop = 0;
@@ -851,8 +855,8 @@ static void refill_free_list(struct sge *sge, struct freelQ *q)
 		skb_reserve(skb, sge->rx_pkt_pad);
 
 		ce->skb = skb;
-		pci_unmap_addr_set(ce, dma_addr, mapping);
-		pci_unmap_len_set(ce, dma_len, dma_len);
+		dma_unmap_addr_set(ce, dma_addr, mapping);
+		dma_unmap_len_set(ce, dma_len, dma_len);
 		e->addr_lo = (u32)mapping;
 		e->addr_hi = (u64)mapping >> 32;
 		e->len_gen = V_CMD_LEN(dma_len) | V_CMD_GEN1(q->genbit);
@@ -1059,13 +1063,13 @@ static inline struct sk_buff *get_packet(struct pci_dev *pdev,
 		skb_reserve(skb, 2);	/* align IP header */
 		skb_put(skb, len);
 		pci_dma_sync_single_for_cpu(pdev,
-					    pci_unmap_addr(ce, dma_addr),
-					    pci_unmap_len(ce, dma_len),
+					    dma_unmap_addr(ce, dma_addr),
+					    dma_unmap_len(ce, dma_len),
 					    PCI_DMA_FROMDEVICE);
 		skb_copy_from_linear_data(ce->skb, skb->data, len);
 		pci_dma_sync_single_for_device(pdev,
-					       pci_unmap_addr(ce, dma_addr),
-					       pci_unmap_len(ce, dma_len),
+					       dma_unmap_addr(ce, dma_addr),
+					       dma_unmap_len(ce, dma_len),
 					       PCI_DMA_FROMDEVICE);
 		recycle_fl_buf(fl, fl->cidx);
 		return skb;
@@ -1077,8 +1081,8 @@ use_orig_buf:
 		return NULL;
 	}
 
-	pci_unmap_single(pdev, pci_unmap_addr(ce, dma_addr),
-			 pci_unmap_len(ce, dma_len), PCI_DMA_FROMDEVICE);
+	pci_unmap_single(pdev, dma_unmap_addr(ce, dma_addr),
+			 dma_unmap_len(ce, dma_len), PCI_DMA_FROMDEVICE);
 	skb = ce->skb;
 	prefetch(skb->data);
 
@@ -1100,8 +1104,8 @@ static void unexpected_offload(struct adapter *adapter, struct freelQ *fl)
 	struct freelQ_ce *ce = &fl->centries[fl->cidx];
 	struct sk_buff *skb = ce->skb;
 
-	pci_dma_sync_single_for_cpu(adapter->pdev, pci_unmap_addr(ce, dma_addr),
-			    pci_unmap_len(ce, dma_len), PCI_DMA_FROMDEVICE);
+	pci_dma_sync_single_for_cpu(adapter->pdev, dma_unmap_addr(ce, dma_addr),
+			    dma_unmap_len(ce, dma_len), PCI_DMA_FROMDEVICE);
 	pr_err("%s: unexpected offload packet, cmd %u\n",
 	       adapter->name, *skb->data);
 	recycle_fl_buf(fl, fl->cidx);
@@ -1123,7 +1127,7 @@ static inline unsigned int compute_large_page_tx_descs(struct sk_buff *skb)
 
 	if (PAGE_SIZE > SGE_TX_DESC_MAX_PLEN) {
 		unsigned int nfrags = skb_shinfo(skb)->nr_frags;
-		unsigned int i, len = skb->len - skb->data_len;
+		unsigned int i, len = skb_headlen(skb);
 		while (len > SGE_TX_DESC_MAX_PLEN) {
 			count++;
 			len -= SGE_TX_DESC_MAX_PLEN;
@@ -1182,7 +1186,7 @@ static inline unsigned int write_large_page_tx_descs(unsigned int pidx,
 			write_tx_desc(e1, *desc_mapping, SGE_TX_DESC_MAX_PLEN,
 				      *gen, nfrags == 0 && *desc_len == 0);
 			ce1->skb = NULL;
-			pci_unmap_len_set(ce1, dma_len, 0);
+			dma_unmap_len_set(ce1, dma_len, 0);
 			*desc_mapping += SGE_TX_DESC_MAX_PLEN;
 			if (*desc_len) {
 				ce1++;
@@ -1219,10 +1223,10 @@ static inline void write_tx_descs(struct adapter *adapter, struct sk_buff *skb,
 	ce = &q->centries[pidx];
 
 	mapping = pci_map_single(adapter->pdev, skb->data,
-				skb->len - skb->data_len, PCI_DMA_TODEVICE);
+				 skb_headlen(skb), PCI_DMA_TODEVICE);
 
 	desc_mapping = mapping;
-	desc_len = skb->len - skb->data_len;
+	desc_len = skb_headlen(skb);
 
 	flags = F_CMD_DATAVALID | F_CMD_SOP |
 	    V_CMD_EOP(nfrags == 0 && desc_len <= SGE_TX_DESC_MAX_PLEN) |
@@ -1233,7 +1237,7 @@ static inline void write_tx_descs(struct adapter *adapter, struct sk_buff *skb,
 	e->addr_hi = (u64)desc_mapping >> 32;
 	e->len_gen = V_CMD_LEN(first_desc_len) | V_CMD_GEN1(gen);
 	ce->skb = NULL;
-	pci_unmap_len_set(ce, dma_len, 0);
+	dma_unmap_len_set(ce, dma_len, 0);
 
 	if (PAGE_SIZE > SGE_TX_DESC_MAX_PLEN &&
 	    desc_len > SGE_TX_DESC_MAX_PLEN) {
@@ -1257,8 +1261,8 @@ static inline void write_tx_descs(struct adapter *adapter, struct sk_buff *skb,
 	}
 
 	ce->skb = NULL;
-	pci_unmap_addr_set(ce, dma_addr, mapping);
-	pci_unmap_len_set(ce, dma_len, skb->len - skb->data_len);
+	dma_unmap_addr_set(ce, dma_addr, mapping);
+	dma_unmap_len_set(ce, dma_len, skb_headlen(skb));
 
 	for (i = 0; nfrags--; i++) {
 		skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
@@ -1284,8 +1288,8 @@ static inline void write_tx_descs(struct adapter *adapter, struct sk_buff *skb,
 			write_tx_desc(e1, desc_mapping, desc_len, gen,
 				      nfrags == 0);
 		ce->skb = NULL;
-		pci_unmap_addr_set(ce, dma_addr, mapping);
-		pci_unmap_len_set(ce, dma_len, frag->size);
+		dma_unmap_addr_set(ce, dma_addr, mapping);
+		dma_unmap_len_set(ce, dma_len, frag->size);
 	}
 	ce->skb = skb;
 	wmb();
@@ -1388,7 +1392,7 @@ static void sge_rx(struct sge *sge, struct freelQ *fl, unsigned int len)
 		++st->rx_cso_good;
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 	} else
-		skb->ip_summed = CHECKSUM_NONE;
+		skb_checksum_none_assert(skb);
 
 	if (unlikely(adapter->vlan_grp && p->vlan_valid)) {
 		st->vlan_xtract++;
@@ -1551,7 +1555,7 @@ static inline int responses_pending(const struct adapter *adapter)
 	const struct respQ *Q = &adapter->sge->respQ;
 	const struct respQ_e *e = &Q->entries[Q->cidx];
 
-	return (e->GenerationBit == Q->genbit);
+	return e->GenerationBit == Q->genbit;
 }
 
 /*
@@ -1658,7 +1662,7 @@ irqreturn_t t1_interrupt(int irq, void *data)
  * The code figures out how many entries the sk_buff will require in the
  * cmdQ and updates the cmdQ data structure with the state once the enqueue
  * has complete. Then, it doesn't access the global structure anymore, but
- * uses the corresponding fields on the stack. In conjuction with a spinlock
+ * uses the corresponding fields on the stack. In conjunction with a spinlock
  * around that code, we can make the function reentrant without holding the
  * lock when we actually enqueue (which might be expensive, especially on
  * architectures with IO MMUs).
@@ -1870,7 +1874,7 @@ netdev_tx_t t1_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	cpl->iff = dev->if_port;
 
 #if defined(CONFIG_VLAN_8021Q) || defined(CONFIG_VLAN_8021Q_MODULE)
-	if (adapter->vlan_grp && vlan_tx_tag_present(skb)) {
+	if (vlan_tx_tag_present(skb)) {
 		cpl->vlan_valid = 1;
 		cpl->vlan = htons(vlan_tx_tag_get(skb));
 		st->vlan_insert++;
@@ -2012,10 +2016,6 @@ static void espibug_workaround_t204(unsigned long data)
 				continue;
 
 			if (!skb->cb[0]) {
-				u8 ch_mac_addr[ETH_ALEN] = {
-					0x0, 0x7, 0x43, 0x0, 0x0, 0x0
-				};
-
 				skb_copy_to_linear_data_offset(skb,
 						    sizeof(struct cpl_tx_pkt),
 							       ch_mac_addr,
@@ -2048,8 +2048,6 @@ static void espibug_workaround(unsigned long data)
 
 	        if ((seop & 0xfff0fff) == 0xfff && skb) {
 	                if (!skb->cb[0]) {
-	                        u8 ch_mac_addr[ETH_ALEN] =
-	                            {0x0, 0x7, 0x43, 0x0, 0x0, 0x0};
 	                        skb_copy_to_linear_data_offset(skb,
 						     sizeof(struct cpl_tx_pkt),
 							       ch_mac_addr,

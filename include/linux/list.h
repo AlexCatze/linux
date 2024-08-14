@@ -1,10 +1,10 @@
 #ifndef _LINUX_LIST_H
 #define _LINUX_LIST_H
 
+#include <linux/types.h>
 #include <linux/stddef.h>
 #include <linux/poison.h>
 #include <linux/prefetch.h>
-#include <asm/system.h>
 
 /*
  * Simple doubly linked list implementation.
@@ -15,10 +15,6 @@
  * generate better code by using them directly rather than
  * using the generic single-entry routines.
  */
-
-struct list_head {
-	struct list_head *next, *prev;
-};
 
 #define LIST_HEAD_INIT(name) { &(name), &(name) }
 
@@ -100,6 +96,11 @@ static inline void __list_del(struct list_head * prev, struct list_head * next)
  * in an undefined state.
  */
 #ifndef CONFIG_DEBUG_LIST
+static inline void __list_del_entry(struct list_head *entry)
+{
+	__list_del(entry->prev, entry->next);
+}
+
 static inline void list_del(struct list_head *entry)
 {
 	__list_del(entry->prev, entry->next);
@@ -107,6 +108,7 @@ static inline void list_del(struct list_head *entry)
 	entry->prev = LIST_POISON2;
 }
 #else
+extern void __list_del_entry(struct list_head *entry);
 extern void list_del(struct list_head *entry);
 #endif
 
@@ -139,7 +141,7 @@ static inline void list_replace_init(struct list_head *old,
  */
 static inline void list_del_init(struct list_head *entry)
 {
-	__list_del(entry->prev, entry->next);
+	__list_del_entry(entry);
 	INIT_LIST_HEAD(entry);
 }
 
@@ -150,7 +152,7 @@ static inline void list_del_init(struct list_head *entry)
  */
 static inline void list_move(struct list_head *list, struct list_head *head)
 {
-	__list_del(list->prev, list->next);
+	__list_del_entry(list);
 	list_add(list, head);
 }
 
@@ -162,7 +164,7 @@ static inline void list_move(struct list_head *list, struct list_head *head)
 static inline void list_move_tail(struct list_head *list,
 				  struct list_head *head)
 {
-	__list_del(list->prev, list->next);
+	__list_del_entry(list);
 	list_add_tail(list, head);
 }
 
@@ -544,20 +546,27 @@ static inline void list_splice_tail_init(struct list_head *list,
 	     &pos->member != (head); 					\
 	     pos = n, n = list_entry(n->member.prev, typeof(*n), member))
 
+/**
+ * list_safe_reset_next - reset a stale list_for_each_entry_safe loop
+ * @pos:	the loop cursor used in the list_for_each_entry_safe loop
+ * @n:		temporary storage used in list_for_each_entry_safe
+ * @member:	the name of the list_struct within the struct.
+ *
+ * list_safe_reset_next is not safe to use in general if the list may be
+ * modified concurrently (eg. the lock is dropped in the loop body). An
+ * exception to this is if the cursor element (pos) is pinned in the list,
+ * and list_safe_reset_next is called after re-taking the lock and before
+ * completing the current iteration of the loop body.
+ */
+#define list_safe_reset_next(pos, n, member)				\
+	n = list_entry(pos->member.next, typeof(*pos), member)
+
 /*
  * Double linked lists with a single pointer list head.
  * Mostly useful for hash tables where the two pointer list head is
  * too wasteful.
  * You lose the ability to access the tail in O(1).
  */
-
-struct hlist_head {
-	struct hlist_node *first;
-};
-
-struct hlist_node {
-	struct hlist_node *next, **pprev;
-};
 
 #define HLIST_HEAD_INIT { .first = NULL }
 #define HLIST_HEAD(name) struct hlist_head name = {  .first = NULL }
@@ -631,6 +640,12 @@ static inline void hlist_add_after(struct hlist_node *n,
 
 	if(next->next)
 		next->next->pprev  = &next->next;
+}
+
+/* after that we'll appear to be on some hlist and hlist_del will work */
+static inline void hlist_add_fake(struct hlist_node *n)
+{
+	n->pprev = &n->next;
 }
 
 /*

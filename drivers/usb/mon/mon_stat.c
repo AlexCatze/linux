@@ -63,6 +63,6 @@ const struct file_operations mon_fops_stat = {
 	.read =		mon_stat_read,
 	/* .write =	mon_stat_write, */
 	/* .poll =		mon_stat_poll, */
-	/* .ioctl =	mon_stat_ioctl, */
+	/* .unlocked_ioctl =	mon_stat_ioctl, */
 	.release =	mon_stat_release,
 };

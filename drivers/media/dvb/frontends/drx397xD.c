@@ -232,7 +232,7 @@ static int write_fw(struct drx397xD_state *s, enum blob_ix ix)
 exit_rc:
 	read_unlock(&fw[s->chip_rev].lock);
 
-	return 0;
+	return rc;
 }
 
 /* Function is not endian safe, use the RD16 wrapper below */
@@ -1097,7 +1097,7 @@ static int drx397x_init(struct dvb_frontend *fe)
 	s->config.ifagc.w0A = 0x3ff;
 	s->config.ifagc.w0C = 0x388;
 
-	/* for signal strenght calculations */
+	/* for signal strength calculations */
 	s->config.ss76 = 820;
 	s->config.ss78 = 2200;
 	s->config.ss7A = 150;

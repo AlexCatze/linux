@@ -404,7 +404,7 @@ void et131x_multicast(struct net_device *netdev)
 	struct et131x_adapter *adapter = netdev_priv(netdev);
 	uint32_t PacketFilter = 0;
 	unsigned long flags;
-	struct dev_mc_list *mclist;
+	struct netdev_hw_addr *ha;
 	int i;
 
 	spin_lock_irqsave(&adapter->Lock, flags);
@@ -415,7 +415,7 @@ void et131x_multicast(struct net_device *netdev)
 	 */
 	PacketFilter = adapter->PacketFilter;
 
-	/* Clear the 'multicast' flag locally; becuase we only have a single
+	/* Clear the 'multicast' flag locally; because we only have a single
 	 * flag to check multicast, and multiple multicast addresses can be
 	 * set, this is the easiest way to determine if more than one
 	 * multicast address is being set.
@@ -426,33 +426,29 @@ void et131x_multicast(struct net_device *netdev)
 	 * accordingly
 	 */
 
-	if (netdev->flags & IFF_PROMISC) {
+	if (netdev->flags & IFF_PROMISC)
 		adapter->PacketFilter |= ET131X_PACKET_TYPE_PROMISCUOUS;
-	} else {
+	else
 		adapter->PacketFilter &= ~ET131X_PACKET_TYPE_PROMISCUOUS;
-	}
 
-	if (netdev->flags & IFF_ALLMULTI) {
+	if (netdev->flags & IFF_ALLMULTI)
 		adapter->PacketFilter |= ET131X_PACKET_TYPE_ALL_MULTICAST;
-	}
 
-	if (netdev_mc_count(netdev) > NIC_MAX_MCAST_LIST) {
+	if (netdev_mc_count(netdev) > NIC_MAX_MCAST_LIST)
 		adapter->PacketFilter |= ET131X_PACKET_TYPE_ALL_MULTICAST;
-	}
 
 	if (netdev_mc_count(netdev) < 1) {
 		adapter->PacketFilter &= ~ET131X_PACKET_TYPE_ALL_MULTICAST;
 		adapter->PacketFilter &= ~ET131X_PACKET_TYPE_MULTICAST;
-	} else {
+	} else
 		adapter->PacketFilter |= ET131X_PACKET_TYPE_MULTICAST;
-	}
 
 	/* Set values in the private adapter struct */
 	i = 0;
-	netdev_for_each_mc_addr(mclist, netdev) {
+	netdev_for_each_mc_addr(ha, netdev) {
 		if (i == NIC_MAX_MCAST_LIST)
 			break;
-		memcpy(adapter->MCList[i++], mclist->dmi_addr, ETH_ALEN);
+		memcpy(adapter->MCList[i++], ha->addr, ETH_ALEN);
 	}
 	adapter->MCAddressCount = i;
 
@@ -607,7 +603,7 @@ int et131x_change_mtu(struct net_device *netdev, int new_mtu)
 	et131x_init_send(adapter);
 
 	et131x_hwaddr_init(adapter);
-	memcpy(netdev->dev_addr, adapter->CurrentAddress, ETH_ALEN);
+	memcpy(netdev->dev_addr, adapter->addr, ETH_ALEN);
 
 	/* Init the device with the new settings */
 	et131x_adapter_setup(adapter);

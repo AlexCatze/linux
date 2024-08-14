@@ -134,7 +134,7 @@ struct vm_area_struct {
 					   within vm_mm. */
 
 	/* linked list of VM areas per task, sorted by address */
-	struct vm_area_struct *vm_next;
+	struct vm_area_struct *vm_next, *vm_prev;
 
 	pgprot_t vm_page_prot;		/* Access permissions of this VMA. */
 	unsigned long vm_flags;		/* Flags, see mm.h. */
@@ -237,8 +237,9 @@ struct mm_struct {
 	atomic_t mm_users;			/* How many users with user space? */
 	atomic_t mm_count;			/* How many references to "struct mm_struct" (users count as 1) */
 	int map_count;				/* number of VMAs */
-	struct rw_semaphore mmap_sem;
+
 	spinlock_t page_table_lock;		/* Protects page tables and some counters */
+	struct rw_semaphore mmap_sem;
 
 	struct list_head mmlist;		/* List of maybe swapped mm's.	These are globally strung
 						 * together off init_mm.mmlist, and are protected
@@ -281,6 +282,9 @@ struct mm_struct {
 	unsigned int token_priority;
 	unsigned int last_interval;
 
+	/* How many tasks sharing this mm are OOM_DISABLE */
+	atomic_t oom_disable_count;
+
 	unsigned long flags; /* Must use atomic bitops to access the bits */
 
 	struct core_state *core_state; /* coredumping support */
@@ -299,7 +303,7 @@ struct mm_struct {
 	 * new_owner->mm == mm
 	 * new_owner->alloc_lock is held
 	 */
-	struct task_struct *owner;
+	struct task_struct __rcu *owner;
 #endif
 
 #ifdef CONFIG_PROC_FS
@@ -309,6 +313,9 @@ struct mm_struct {
 #endif
 #ifdef CONFIG_MMU_NOTIFIER
 	struct mmu_notifier_mm *mmu_notifier_mm;
+#endif
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+	pgtable_t pmd_huge_pte; /* protected by page_table_lock */
 #endif
 };
 

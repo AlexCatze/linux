@@ -10,10 +10,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #include <linux/types.h>
@@ -34,9 +30,9 @@
 #include <mach/common.h>
 #include <asm/page.h>
 #include <asm/setup.h>
-#include <mach/board-qong.h>
-#include <mach/imx-uart.h>
 #include <mach/iomux-mx3.h>
+
+#include "devices-imx31.h"
 #include "devices.h"
 
 /* FPGA defines */
@@ -58,11 +54,7 @@
 
 #define QONG_FPGA_IRQ		IOMUX_TO_IRQ(MX31_PIN_DTR_DCE1)
 
-/*
- * This file contains the board-specific initialization routines.
- */
-
-static struct imxuart_platform_data uart_pdata = {
+static const struct imxuart_platform_data uart_pdata __initconst = {
 	.flags = IMXUART_HAVE_RTSCTS,
 };
 
@@ -73,11 +65,11 @@ static int uart_pins[] = {
 	MX31_PIN_RXD1__RXD1
 };
 
-static inline void mxc_init_imx_uart(void)
+static inline void __init mxc_init_imx_uart(void)
 {
 	mxc_iomux_setup_multiple_pins(uart_pins, ARRAY_SIZE(uart_pins),
 			"uart-0");
-	mxc_register_device(&mxc_uart_device0, &uart_pdata);
+	imx31_add_imx_uart0(&uart_pdata);
 }
 
 static struct resource dnet_resources[] = {
@@ -116,7 +108,7 @@ static struct physmap_flash_data qong_flash_data = {
 
 static struct resource qong_flash_resource = {
 	.start = MX31_CS0_BASE_ADDR,
-	.end = MX31_CS0_BASE_ADDR + QONG_NOR_SIZE - 1,
+	.end = MX31_CS0_BASE_ADDR + SZ_128M - 1,
 	.flags = IORESOURCE_MEM,
 };
 
@@ -169,6 +161,7 @@ static void qong_nand_select_chip(struct mtd_info *mtd, int chip)
 
 static struct platform_nand_data qong_nand_data = {
 	.chip = {
+		.nr_chips		= 1,
 		.chip_delay		= 20,
 		.options		= 0,
 	},
@@ -250,7 +243,7 @@ static void __init qong_init_fpga(void)
 /*
  * Board specific initialization.
  */
-static void __init mxc_board_init(void)
+static void __init qong_init(void)
 {
 	mxc_init_imx_uart();
 	qong_init_nor_mtd();
@@ -266,18 +259,12 @@ static struct sys_timer qong_timer = {
 	.init	= qong_timer_init,
 };
 
-/*
- * The following uses standard kernel macros defined in arch.h in order to
- * initialize __mach_desc_QONG data structure.
- */
-
 MACHINE_START(QONG, "Dave/DENX QongEVB-LITE")
 	/* Maintainer: DENX Software Engineering GmbH */
-	.phys_io        = MX31_AIPS1_BASE_ADDR,
-	.io_pg_offst    = (MX31_AIPS1_BASE_ADDR_VIRT >> 18) & 0xfffc,
-	.boot_params    = MX3x_PHYS_OFFSET + 0x100,
-	.map_io         = mx31_map_io,
-	.init_irq       = mx31_init_irq,
-	.init_machine   = mxc_board_init,
-	.timer          = &qong_timer,
+	.boot_params = MX3x_PHYS_OFFSET + 0x100,
+	.map_io = mx31_map_io,
+	.init_early = imx31_init_early,
+	.init_irq = mx31_init_irq,
+	.timer = &qong_timer,
+	.init_machine = qong_init,
 MACHINE_END

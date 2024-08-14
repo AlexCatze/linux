@@ -30,7 +30,8 @@
     Abstract:
 
     Revision History:
-    Who          When          What
+    Who          	When         	What
+    Justin P. Mattock	11/07/2010 	Fix typo in a comment
     ---------    ----------    ----------------------------------------------
 */
 
@@ -101,8 +102,8 @@ extern const struct iw_handler_def rt28xx_iw_handler_def;
 /***********************************************************************************
  *	OS Specific definitions and data structures
  ***********************************************************************************/
-typedef int (*HARD_START_XMIT_FUNC) (struct sk_buff * skb,
-				     struct net_device * net_dev);
+typedef int (*HARD_START_XMIT_FUNC) (struct sk_buff *skb,
+				     struct net_device *net_dev);
 
 #ifdef RTMP_MAC_PCI
 #ifndef PCI_DEVICE
@@ -365,7 +366,7 @@ typedef void (*TIMER_FUNCTION) (unsigned long);
 
 #define ONE_TICK 1
 
-static inline void NdisGetSystemUpTime(unsigned long * time)
+static inline void NdisGetSystemUpTime(unsigned long *time)
 {
 	*time = jiffies;
 }
@@ -409,9 +410,6 @@ struct os_cookie {
 /***********************************************************************************
  *	OS debugging and printing related definitions and data structure
  ***********************************************************************************/
-#define PRINT_MAC(addr)	\
-	addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
-
 #ifdef DBG
 extern unsigned long RTDebugLevel;
 
@@ -425,11 +423,7 @@ do{                                   \
 
 #define DBGPRINT(Level, Fmt)    DBGPRINT_RAW(Level, Fmt)
 
-#define DBGPRINT_ERR(Fmt)           \
-{                                   \
-    printk("ERROR! ");          \
-    printk Fmt;                  \
-}
+#define DBGPRINT_ERR(fmt, args...) printk(KERN_ERR fmt, ##args)
 
 #define DBGPRINT_S(Status, Fmt)		\
 {									\
@@ -455,10 +449,11 @@ void hex_dump(char *str, unsigned char *pSrcBufVA, unsigned int SrcBufLen);
  * Device DMA Access related definitions and data structures.
  **********************************************************************************/
 #ifdef RTMP_MAC_PCI
-dma_addr_t linux_pci_map_single(void *handle, void *ptr, size_t size,
-				int sd_idx, int direction);
-void linux_pci_unmap_single(void *handle, dma_addr_t dma_addr, size_t size,
-			    int direction);
+struct rt_rtmp_adapter;
+dma_addr_t linux_pci_map_single(struct rt_rtmp_adapter *pAd, void *ptr,
+				size_t size, int sd_idx, int direction);
+void linux_pci_unmap_single(struct rt_rtmp_adapter *pAd, dma_addr_t dma_addr,
+			    size_t size, int direction);
 
 #define PCI_MAP_SINGLE(_handle, _ptr, _size, _sd_idx, _dir) \
 	linux_pci_map_single(_handle, _ptr, _size, _sd_idx, _dir)
@@ -475,11 +470,6 @@ void linux_pci_unmap_single(void *handle, dma_addr_t dma_addr, size_t size,
 #define DEV_ALLOC_SKB(_length) \
 	dev_alloc_skb(_length)
 #endif /* RTMP_MAC_PCI // */
-#ifdef RTMP_MAC_USB
-#define PCI_MAP_SINGLE(_handle, _ptr, _size, _dir) (unsigned long)0
-
-#define PCI_UNMAP_SINGLE(_handle, _ptr, _size, _dir)
-#endif /* RTMP_MAC_USB // */
 
 /*
  * unsigned long
@@ -733,7 +723,7 @@ void linux_pci_unmap_single(void *handle, dma_addr_t dma_addr, size_t size,
 #define RTMP_GET_PACKET_MOREDATA(_p)				(RTPKT_TO_OSPKT(_p)->cb[CB_OFF+7])
 
 /* */
-/*      Sepcific Pakcet Type definition */
+/*      Specific Packet Type definition */
 /* */
 #define RTMP_PACKET_SPECIFIC_CB_OFFSET	11
 
@@ -825,7 +815,7 @@ void linux_pci_unmap_single(void *handle, dma_addr_t dma_addr, size_t size,
 /***********************************************************************************
  *	Other function prototypes definitions
  ***********************************************************************************/
-void RTMP_GetCurrentSystemTime(LARGE_INTEGER * time);
+void RTMP_GetCurrentSystemTime(LARGE_INTEGER *time);
 int rt28xx_packet_xmit(struct sk_buff *skb);
 
 #ifdef RTMP_MAC_PCI
@@ -837,8 +827,8 @@ IRQ_HANDLE_TYPE rt2860_interrupt(int irq, void *dev_instance);
 
 int rt28xx_sta_ioctl(struct net_device *net_dev, IN OUT struct ifreq *rq, int cmd);
 
-extern int ra_mtd_write(int num, loff_t to, size_t len, const u_char * buf);
-extern int ra_mtd_read(int num, loff_t from, size_t len, u_char * buf);
+extern int ra_mtd_write(int num, loff_t to, size_t len, const u_char *buf);
+extern int ra_mtd_read(int num, loff_t from, size_t len, u_char *buf);
 
 #define GET_PAD_FROM_NET_DEV(_pAd, _net_dev)	(_pAd) = (struct rt_rtmp_adapter *)(_net_dev)->ml_priv;
 

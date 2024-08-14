@@ -57,9 +57,11 @@ dead.  However, this detection isn't perfect on some devices.  In such
 a case, you can change the default method via `position_fix` option.
 
 `position_fix=1` means to use LPIB method explicitly.
-`position_fix=2` means to use the position-buffer.  0 is the default
-value, the automatic check and fallback to LPIB as described in the
-above.  If you get a problem of repeated sounds, this option might
+`position_fix=2` means to use the position-buffer.
+`position_fix=3` means to use a combination of both methods, needed
+for some VIA and ATI controllers.  0 is the default value for all other
+controllers, the automatic check and fallback to LPIB as described in
+the above.  If you get a problem of repeated sounds, this option might
 help.
 
 In addition to that, every controller is known to be broken regarding
@@ -203,7 +205,6 @@ Note that `model=generic` has a special meaning.  It means to use the
 generic parser regardless of the codec.  Usually the codec-specific
 parser is much better than the generic parser (as now).  Thus this
 option is more about the debugging purpose.
-
 
 Speaker and Headphone Output
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -563,7 +564,7 @@ compare the codec registers directly.
 Send a bug report either the followings:
 
 kernel-bugzilla::
-  http://bugme.linux-foundation.org/
+  https://bugzilla.kernel.org/
 alsa-devel ML::
   alsa-devel@alsa-project.org
 
@@ -600,6 +601,9 @@ probing, the proc file is available, so you can get the raw codec
 information before modified by the driver.  Of course, the driver
 isn't usable with `probe_only=1`.  But you can continue the
 configuration via hwdep sysfs file if hda-reconfig option is enabled.
+Using `probe_only` mask 2 skips the reset of HDA codecs (use
+`probe_only=3` as module option). The hwdep interface can be used
+to determine the BIOS codec initialization.
 
 
 hda-verb

@@ -23,12 +23,13 @@
 #include <asm/dma.h>
 #include <asm/bfin5xx_spi.h>
 #include <asm/reboot.h>
+#include <asm/portmux.h>
 #include <linux/spi/ad7877.h>
 
 /*
  * Name the Board for the /proc/cpuinfo
  */
-char *bfin_board_name = "CamSig Minotaur BF537";
+const char bfin_board_name[] = "CamSig Minotaur BF537";
 
 #if defined(CONFIG_BFIN_CFPCMCIA) || defined(CONFIG_BFIN_CFPCMCIA_MODULE)
 static struct resource bfin_pcmcia_cf_resources[] = {
@@ -67,13 +68,35 @@ static struct platform_device rtc_device = {
 #endif
 
 #if defined(CONFIG_BFIN_MAC) || defined(CONFIG_BFIN_MAC_MODULE)
+#include <linux/bfin_mac.h>
+static const unsigned short bfin_mac_peripherals[] = P_MII0;
+
+static struct bfin_phydev_platform_data bfin_phydev_data[] = {
+	{
+		.addr = 1,
+		.irq = IRQ_MAC_PHYINT,
+	},
+};
+
+static struct bfin_mii_bus_platform_data bfin_mii_bus_data = {
+	.phydev_number = 1,
+	.phydev_data = bfin_phydev_data,
+	.phy_mode = PHY_INTERFACE_MODE_MII,
+	.mac_peripherals = bfin_mac_peripherals,
+};
+
 static struct platform_device bfin_mii_bus = {
 	.name = "bfin_mii_bus",
+	.dev = {
+		.platform_data = &bfin_mii_bus_data,
+	}
 };
 
 static struct platform_device bfin_mac_device = {
 	.name = "bfin_mac",
-	.dev.platform_data = &bfin_mii_bus,
+	.dev = {
+		.platform_data = &bfin_mii_bus,
+	}
 };
 #endif
 
@@ -240,7 +263,7 @@ static struct resource bfin_uart0_resources[] = {
 	},
 };
 
-unsigned short bfin_uart0_peripherals[] = {
+static unsigned short bfin_uart0_peripherals[] = {
 	P_UART0_TX, P_UART0_RX, 0
 };
 
@@ -283,7 +306,7 @@ static struct resource bfin_uart1_resources[] = {
 	},
 };
 
-unsigned short bfin_uart1_peripherals[] = {
+static unsigned short bfin_uart1_peripherals[] = {
 	P_UART1_TX, P_UART1_RX, 0
 };
 
@@ -396,9 +419,9 @@ static struct resource bfin_sport0_uart_resources[] = {
 	},
 };
 
-unsigned short bfin_sport0_peripherals[] = {
+static unsigned short bfin_sport0_peripherals[] = {
 	P_SPORT0_TFS, P_SPORT0_DTPRI, P_SPORT0_TSCLK, P_SPORT0_RFS,
-	P_SPORT0_DRPRI, P_SPORT0_RSCLK, P_SPORT0_DRSEC, P_SPORT0_DTSEC, 0
+	P_SPORT0_DRPRI, P_SPORT0_RSCLK, 0
 };
 
 static struct platform_device bfin_sport0_uart_device = {
@@ -430,9 +453,9 @@ static struct resource bfin_sport1_uart_resources[] = {
 	},
 };
 
-unsigned short bfin_sport1_peripherals[] = {
+static unsigned short bfin_sport1_peripherals[] = {
 	P_SPORT1_TFS, P_SPORT1_DTPRI, P_SPORT1_TSCLK, P_SPORT1_RFS,
-	P_SPORT1_DRPRI, P_SPORT1_RSCLK, P_SPORT1_DRSEC, P_SPORT1_DTSEC, 0
+	P_SPORT1_DRPRI, P_SPORT1_RSCLK, 0
 };
 
 static struct platform_device bfin_sport1_uart_device = {

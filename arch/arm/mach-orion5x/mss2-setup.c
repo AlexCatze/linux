@@ -261,11 +261,10 @@ static void __init mss2_init(void)
 
 MACHINE_START(MSS2, "Maxtor Shared Storage II")
 	/* Maintainer: Sylver Bruneau <sylver.bruneau@googlemail.com> */
-	.phys_io	= ORION5X_REGS_PHYS_BASE,
-	.io_pg_offst	= ((ORION5X_REGS_VIRT_BASE) >> 18) & 0xFFFC,
 	.boot_params	= 0x00000100,
 	.init_machine	= mss2_init,
 	.map_io		= orion5x_map_io,
+	.init_early	= orion5x_init_early,
 	.init_irq	= orion5x_init_irq,
 	.timer		= &orion5x_timer,
 	.fixup		= tag_fixup_mem32

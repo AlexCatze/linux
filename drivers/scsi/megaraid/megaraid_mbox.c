@@ -113,8 +113,7 @@ static int megaraid_mbox_fire_sync_cmd(adapter_t *);
 static void megaraid_mbox_display_scb(adapter_t *, scb_t *);
 static void megaraid_mbox_setup_device_map(adapter_t *);
 
-static int megaraid_queue_command(struct scsi_cmnd *,
-		void (*)(struct scsi_cmnd *));
+static int megaraid_queue_command(struct Scsi_Host *, struct scsi_cmnd *);
 static scb_t *megaraid_mbox_build_cmd(adapter_t *, struct scsi_cmnd *, int *);
 static void megaraid_mbox_runpendq(adapter_t *, scb_t *);
 static void megaraid_mbox_prepare_pthru(adapter_t *, scb_t *,
@@ -1484,7 +1483,7 @@ mbox_post_cmd(adapter_t *adapter, scb_t *scb)
  * Queue entry point for mailbox based controllers.
  */
 static int
-megaraid_queue_command(struct scsi_cmnd *scp, void (*done)(struct scsi_cmnd *))
+megaraid_queue_command_lck(struct scsi_cmnd *scp, void (*done)(struct scsi_cmnd *))
 {
 	adapter_t	*adapter;
 	scb_t		*scb;
@@ -1512,6 +1511,8 @@ megaraid_queue_command(struct scsi_cmnd *scp, void (*done)(struct scsi_cmnd *))
 	megaraid_mbox_runpendq(adapter, scb);
 	return if_busy;
 }
+
+static DEF_SCSI_QCMD(megaraid_queue_command)
 
 /**
  * megaraid_mbox_build_cmd - transform the mid-layer scsi commands
@@ -2688,7 +2689,7 @@ megaraid_reset_handler(struct scsi_cmnd *scp)
 				(MBOX_RESET_WAIT + MBOX_RESET_EXT_WAIT) - i));
 		}
 
-		// bailout if no recovery happended in reset time
+		// bailout if no recovery happened in reset time
 		if (adapter->outstanding_cmds == 0) {
 			break;
 		}
@@ -3451,7 +3452,7 @@ megaraid_mbox_display_scb(adapter_t *adapter, scb_t *scb)
  * megaraid_mbox_setup_device_map - manage device ids
  * @adapter	: Driver's soft state
  *
- * Manange the device ids to have an appropraite mapping between the kernel
+ * Manange the device ids to have an appropriate mapping between the kernel
  * scsi addresses and megaraid scsi and logical drive addresses. We export
  * scsi devices on their actual addresses, whereas the logical drives are
  * exported on a virtual scsi channel.
@@ -3972,7 +3973,7 @@ megaraid_sysfs_get_ldmap_timeout(unsigned long data)
  * NOTE: The commands issuance functionality is not generalized and
  * implemented in context of "get ld map" command only. If required, the
  * command issuance logical can be trivially pulled out and implemented as a
- * standalone libary. For now, this should suffice since there is no other
+ * standalone library. For now, this should suffice since there is no other
  * user of this interface.
  *
  * Return 0 on success.

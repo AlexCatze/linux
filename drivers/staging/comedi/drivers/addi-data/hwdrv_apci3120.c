@@ -8,7 +8,7 @@ Copyright (C) 2004,2005  ADDI-DATA GmbH for the source code of this module.
 	D-77833 Ottersweier
 	Tel: +19(0)7223/9493-0
 	Fax: +49(0)7223/9493-92
-	http://www.addi-data-com
+	http://www.addi-data.com
 	info@addi-data.com
 
 This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
@@ -148,7 +148,7 @@ int i_APCI3120_InsnReadAnalogInput(struct comedi_device *dev, struct comedi_subd
 	unsigned short us_ConvertTiming, us_TmpValue, i;
 	unsigned char b_Tmp;
 
-	/*  fix convertion time to 10 us */
+	/*  fix conversion time to 10 us */
 	if (!devpriv->ui_EocEosConversionTime) {
 		printk("No timer0 Value using 10 us\n");
 		us_ConvertTiming = 10;
@@ -251,7 +251,7 @@ int i_APCI3120_InsnReadAnalogInput(struct comedi_device *dev, struct comedi_subd
 				APCI3120_SELECT_TIMER_0_WORD;
 			outb(b_Tmp, devpriv->iobase + APCI3120_TIMER_CRT0);
 
-			/* Set the convertion time */
+			/* Set the conversion time */
 			outw(us_ConvertTiming,
 				devpriv->iobase + APCI3120_TIMER_VALUE);
 
@@ -311,7 +311,7 @@ int i_APCI3120_InsnReadAnalogInput(struct comedi_device *dev, struct comedi_subd
 				APCI3120_SELECT_TIMER_0_WORD;
 			outb(b_Tmp, devpriv->iobase + APCI3120_TIMER_CRT0);
 
-			/* Set the convertion time */
+			/* Set the conversion time */
 			outw(us_ConvertTiming,
 				devpriv->iobase + APCI3120_TIMER_VALUE);
 
@@ -354,9 +354,9 @@ int i_APCI3120_InsnReadAnalogInput(struct comedi_device *dev, struct comedi_subd
 			/* Start conversion */
 			outw(0, devpriv->iobase + APCI3120_START_CONVERSION);
 
-			/* Waiting of end of convertion if interrupt is not installed */
+			/* Waiting of end of conversion if interrupt is not installed */
 			if (devpriv->b_EocEosInterrupt == APCI3120_DISABLE) {
-				/* Waiting the end of convertion */
+				/* Waiting the end of conversion */
 				do {
 					us_TmpValue =
 						inw(devpriv->iobase +
@@ -854,7 +854,7 @@ int i_APCI3120_CyclicAnalogInput(int mode, struct comedi_device *dev,
 				b_DigitalOutputRegister) & 0xF0) |
 			APCI3120_SELECT_TIMER_0_WORD;
 		outb(b_Tmp, dev->iobase + APCI3120_TIMER_CRT0);
-		/* Set the convertion time */
+		/* Set the conversion time */
 		outw(((unsigned short) ui_TimerValue0),
 			dev->iobase + APCI3120_TIMER_VALUE);
 		break;
@@ -872,7 +872,7 @@ int i_APCI3120_CyclicAnalogInput(int mode, struct comedi_device *dev,
 				b_DigitalOutputRegister) & 0xF0) |
 			APCI3120_SELECT_TIMER_1_WORD;
 		outb(b_Tmp, dev->iobase + APCI3120_TIMER_CRT0);
-		/* Set the convertion time */
+		/* Set the conversion time */
 		outw(((unsigned short) ui_TimerValue1),
 			dev->iobase + APCI3120_TIMER_VALUE);
 
@@ -889,7 +889,7 @@ int i_APCI3120_CyclicAnalogInput(int mode, struct comedi_device *dev,
 			APCI3120_SELECT_TIMER_0_WORD;
 		outb(b_Tmp, dev->iobase + APCI3120_TIMER_CRT0);
 
-		/* Set the convertion time */
+		/* Set the conversion time */
 		outw(((unsigned short) ui_TimerValue0),
 			dev->iobase + APCI3120_TIMER_VALUE);
 		break;
@@ -1090,13 +1090,13 @@ int i_APCI3120_CyclicAnalogInput(int mode, struct comedi_device *dev,
  * and put into into an array array used may be for differnet pages
  */
 
-		/*  DMA Start Adress Low */
+		/*  DMA Start Address Low */
 		outw(APCI3120_ADD_ON_MWAR_LOW, devpriv->i_IobaseAddon + 0);
 		outw((devpriv->ul_DmaBufferHw[0] & 0xFFFF),
 			devpriv->i_IobaseAddon + 2);
 
 		/*************************/
-		/* DMA Start Adress High */
+		/* DMA Start Address High */
 		/*************************/
 		outw(APCI3120_ADD_ON_MWAR_HIGH, devpriv->i_IobaseAddon + 0);
 		outw((devpriv->ul_DmaBufferHw[0] / 65536),
@@ -1104,7 +1104,7 @@ int i_APCI3120_CyclicAnalogInput(int mode, struct comedi_device *dev,
 
 /*
  * 4
- * amount of bytes to be transfered set transfer count used ADDON
+ * amount of bytes to be transferred set transfer count used ADDON
  * MWTC register commented testing
  * outl(devpriv->ui_DmaBufferUsesize[0],
  * devpriv->i_IobaseAddon+AMCC_OP_REG_AMWTC);
@@ -1733,11 +1733,11 @@ void v_APCI3120_InterruptDma(int irq, void *d)
 		var = devpriv->ul_DmaBufferHw[next_dma_buf];
 		high_word = var / 65536;
 
-		/* DMA Start Adress Low */
+		/* DMA Start Address Low */
 		outw(APCI3120_ADD_ON_MWAR_LOW, devpriv->i_IobaseAddon + 0);
 		outw(low_word, devpriv->i_IobaseAddon + 2);
 
-		/* DMA Start Adress High */
+		/* DMA Start Address High */
 		outw(APCI3120_ADD_ON_MWAR_HIGH, devpriv->i_IobaseAddon + 0);
 		outw(high_word, devpriv->i_IobaseAddon + 2);
 

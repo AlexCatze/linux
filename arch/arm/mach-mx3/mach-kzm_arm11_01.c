@@ -16,10 +16,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #include <linux/gpio.h>
@@ -31,25 +27,41 @@
 
 #include <asm/irq.h>
 #include <asm/mach-types.h>
+#include <asm/memory.h>
 #include <asm/setup.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/irq.h>
 #include <asm/mach/map.h>
 #include <asm/mach/time.h>
 
-#include <mach/board-kzmarm11.h>
 #include <mach/clock.h>
 #include <mach/common.h>
-#include <mach/imx-uart.h>
 #include <mach/iomux-mx3.h>
-#include <mach/memory.h>
 
+#include "devices-imx31.h"
 #include "devices.h"
 
-#define KZM_ARM11_IO_ADDRESS(x) (					\
-	IMX_IO_ADDRESS(x, MX31_CS4) ?:					\
-	IMX_IO_ADDRESS(x, MX31_CS5) ?:					\
+#define KZM_ARM11_IO_ADDRESS(x) (IOMEM(					\
+	IMX_IO_P2V_MODULE(x, MX31_CS4) ?:				\
+	IMX_IO_P2V_MODULE(x, MX31_CS5)) ?:				\
 	MX31_IO_ADDRESS(x))
+
+/*
+ *  KZM-ARM11-01 Board Control Registers on FPGA
+ */
+#define KZM_ARM11_CTL1		(MX31_CS4_BASE_ADDR + 0x1000)
+#define KZM_ARM11_CTL2		(MX31_CS4_BASE_ADDR + 0x1001)
+#define KZM_ARM11_RSW1		(MX31_CS4_BASE_ADDR + 0x1002)
+#define KZM_ARM11_BACK_LIGHT	(MX31_CS4_BASE_ADDR + 0x1004)
+#define KZM_ARM11_FPGA_REV	(MX31_CS4_BASE_ADDR + 0x1008)
+#define KZM_ARM11_7SEG_LED	(MX31_CS4_BASE_ADDR + 0x1010)
+#define KZM_ARM11_LEDS		(MX31_CS4_BASE_ADDR + 0x1020)
+#define KZM_ARM11_DIPSW2	(MX31_CS4_BASE_ADDR + 0x1003)
+
+/*
+ * External UART for touch panel on FPGA
+ */
+#define KZM_ARM11_16550		(MX31_CS4_BASE_ADDR + 0x1050)
 
 #if defined(CONFIG_SERIAL_8250) || defined(CONFIG_SERIAL_8250_MODULE)
 /*
@@ -173,15 +185,14 @@ static inline int kzm_init_smsc9118(void)
 #endif
 
 #if defined(CONFIG_SERIAL_IMX) || defined(CONFIG_SERIAL_IMX_MODULE)
-static struct imxuart_platform_data uart_pdata = {
+static const struct imxuart_platform_data uart_pdata __initconst = {
 	.flags = IMXUART_HAVE_RTSCTS,
 };
 
 static void __init kzm_init_imx_uart(void)
 {
-	mxc_register_device(&mxc_uart_device0, &uart_pdata);
-
-	mxc_register_device(&mxc_uart_device1, &uart_pdata);
+	imx31_add_imx_uart0(&uart_pdata);
+	imx31_add_imx_uart1(&uart_pdata);
 }
 #else
 static inline void kzm_init_imx_uart(void)
@@ -255,19 +266,14 @@ static void __init kzm_timer_init(void)
 }
 
 static struct sys_timer kzm_timer = {
-	.init   = kzm_timer_init,
+	.init = kzm_timer_init,
 };
 
-/*
- * The following uses standard kernel macros define in arch.h in order to
- * initialize __mach_desc_KZM_ARM11_01 data structure.
- */
 MACHINE_START(KZM_ARM11_01, "Kyoto Microcomputer Co., Ltd. KZM-ARM11-01")
-	.phys_io        = MX31_AIPS1_BASE_ADDR,
-	.io_pg_offst    = (MX31_AIPS1_BASE_ADDR_VIRT >> 18) & 0xfffc,
-	.boot_params    = MX3x_PHYS_OFFSET + 0x100,
-	.map_io         = kzm_map_io,
-	.init_irq       = mx31_init_irq,
-	.init_machine   = kzm_board_init,
-	.timer          = &kzm_timer,
+	.boot_params = MX3x_PHYS_OFFSET + 0x100,
+	.map_io = kzm_map_io,
+	.init_early = imx31_init_early,
+	.init_irq = mx31_init_irq,
+	.timer = &kzm_timer,
+	.init_machine = kzm_board_init,
 MACHINE_END

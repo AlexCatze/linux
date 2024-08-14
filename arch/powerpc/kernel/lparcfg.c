@@ -38,7 +38,7 @@
 #include <asm/vio.h>
 #include <asm/mmu.h>
 
-#define MODULE_VERS "1.8"
+#define MODULE_VERS "1.9"
 #define MODULE_NAME "lparcfg"
 
 /* #define LPARCFG_DEBUG */
@@ -56,7 +56,7 @@ static unsigned long get_purr(void)
 
 	for_each_possible_cpu(cpu) {
 		if (firmware_has_feature(FW_FEATURE_ISERIES))
-			sum_purr += lppaca[cpu].emulated_time_base;
+			sum_purr += lppaca_of(cpu).emulated_time_base;
 		else {
 			struct cpu_usage *cu;
 
@@ -262,8 +262,8 @@ static void parse_ppp_data(struct seq_file *m)
 	seq_printf(m, "system_active_processors=%d\n",
 	           ppp_data.active_system_procs);
 
-	/* pool related entries are apropriate for shared configs */
-	if (lppaca[0].shared_proc) {
+	/* pool related entries are appropriate for shared configs */
+	if (lppaca_of(0).shared_proc) {
 		unsigned long pool_idle_time, pool_procs;
 
 		seq_printf(m, "pool=%d\n", ppp_data.pool_num);
@@ -460,8 +460,8 @@ static void pseries_cmo_data(struct seq_file *m)
 		return;
 
 	for_each_possible_cpu(cpu) {
-		cmo_faults += lppaca[cpu].cmo_faults;
-		cmo_fault_time += lppaca[cpu].cmo_fault_time;
+		cmo_faults += lppaca_of(cpu).cmo_faults;
+		cmo_fault_time += lppaca_of(cpu).cmo_fault_time;
 	}
 
 	seq_printf(m, "cmo_faults=%lu\n", cmo_faults);
@@ -479,12 +479,20 @@ static void splpar_dispatch_data(struct seq_file *m)
 	unsigned long dispatch_dispersions = 0;
 
 	for_each_possible_cpu(cpu) {
-		dispatches += lppaca[cpu].yield_count;
-		dispatch_dispersions += lppaca[cpu].dispersion_count;
+		dispatches += lppaca_of(cpu).yield_count;
+		dispatch_dispersions += lppaca_of(cpu).dispersion_count;
 	}
 
 	seq_printf(m, "dispatches=%lu\n", dispatches);
 	seq_printf(m, "dispatch_dispersions=%lu\n", dispatch_dispersions);
+}
+
+static void parse_em_data(struct seq_file *m)
+{
+	unsigned long retbuf[PLPAR_HCALL_BUFSIZE];
+
+	if (plpar_hcall(H_GET_EM_PARMS, retbuf) == H_SUCCESS)
+		seq_printf(m, "power_mode_data=%016lx\n", retbuf[0]);
 }
 
 static int pseries_lparcfg_data(struct seq_file *m, void *v)
@@ -537,9 +545,11 @@ static int pseries_lparcfg_data(struct seq_file *m, void *v)
 	seq_printf(m, "partition_potential_processors=%d\n",
 		   partition_potential_processors);
 
-	seq_printf(m, "shared_processor_mode=%d\n", lppaca[0].shared_proc);
+	seq_printf(m, "shared_processor_mode=%d\n", lppaca_of(0).shared_proc);
 
 	seq_printf(m, "slb_size=%d\n", mmu_slb_size);
+
+	parse_em_data(m);
 
 	return 0;
 }
@@ -770,6 +780,7 @@ static const struct file_operations lparcfg_fops = {
 	.write		= lparcfg_write,
 	.open		= lparcfg_open,
 	.release	= single_release,
+	.llseek		= seq_lseek,
 };
 
 static int __init lparcfg_init(void)

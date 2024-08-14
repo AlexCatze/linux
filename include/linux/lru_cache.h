@@ -148,7 +148,7 @@ write intent log information, three of which are mentioned here.
  *
  * DRBD currently (May 2009) only uses 61 elements on the resync lru_cache
  * (total memory usage 2 pages), and up to 3833 elements on the act_log
- * lru_cache, totalling ~215 kB for 64bit architechture, ~53 pages.
+ * lru_cache, totalling ~215 kB for 64bit architecture, ~53 pages.
  *
  * We usually do not actually free these objects again, but only "recycle"
  * them, as the change "index: -old_label, +LC_FREE" would need a transaction
@@ -262,7 +262,7 @@ extern void lc_seq_dump_details(struct seq_file *seq, struct lru_cache *lc, char
  * @lc: the lru cache to operate on
  *
  * Note that the reference counts and order on the active and lru lists may
- * still change.  Returns true if we aquired the lock.
+ * still change.  Returns true if we acquired the lock.
  */
 static inline int lc_try_lock(struct lru_cache *lc)
 {

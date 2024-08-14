@@ -50,7 +50,7 @@ struct sd {
 	struct workqueue_struct *work_thread;
 	u8 quality;				 /* image quality */
 	u8 jpegqual;				/* webcam quality */
-	u8 *jpeg_hdr;
+	u8 jpeg_hdr[JPEG_HDR_SZ];
 };
 
 	struct jlj_command {
@@ -82,7 +82,7 @@ static int jlj_write2(struct gspca_dev *gspca_dev, unsigned char *command)
 			usb_sndbulkpipe(gspca_dev->dev, 3),
 			gspca_dev->usb_buf, 2, NULL, 500);
 	if (retval < 0)
-		PDEBUG(D_ERR, "command write [%02x] error %d",
+		err("command write [%02x] error %d",
 				gspca_dev->usb_buf[0], retval);
 	return retval;
 }
@@ -97,7 +97,7 @@ static int jlj_read1(struct gspca_dev *gspca_dev, unsigned char response)
 				gspca_dev->usb_buf, 1, NULL, 500);
 	response = gspca_dev->usb_buf[0];
 	if (retval < 0)
-		PDEBUG(D_ERR, "read command [%02x] error %d",
+		err("read command [%02x] error %d",
 				gspca_dev->usb_buf[0], retval);
 	return retval;
 }
@@ -183,7 +183,6 @@ static void jlj_dostream(struct work_struct *work)
 	struct sd *dev = container_of(work, struct sd, work_struct);
 	struct gspca_dev *gspca_dev = &dev->gspca_dev;
 	int blocks_left; /* 0x200-sized blocks remaining in current frame. */
-	int size_in_blocks;
 	int act_len;
 	int packet_type;
 	int ret;
@@ -191,7 +190,7 @@ static void jlj_dostream(struct work_struct *work)
 
 	buffer = kmalloc(JEILINJ_MAX_TRANSFER, GFP_KERNEL | GFP_DMA);
 	if (!buffer) {
-		PDEBUG(D_ERR, "Couldn't allocate USB buffer");
+		err("Couldn't allocate USB buffer");
 		goto quit_stream;
 	}
 	while (gspca_dev->present && gspca_dev->streaming) {
@@ -209,7 +208,6 @@ static void jlj_dostream(struct work_struct *work)
 			act_len, JEILINJ_MAX_TRANSFER);
 		if (ret < 0 || act_len < FRAME_HEADER_LEN)
 			goto quit_stream;
-		size_in_blocks = buffer[0x0a];
 		blocks_left = buffer[0x0a] - 1;
 		PDEBUG(D_STREAM, "blocks_left = 0x%x", blocks_left);
 
@@ -282,7 +280,6 @@ static void sd_stop0(struct gspca_dev *gspca_dev)
 	destroy_workqueue(dev->work_thread);
 	dev->work_thread = NULL;
 	mutex_lock(&gspca_dev->usb_lock);
-	kfree(dev->jpeg_hdr);
 }
 
 /* this function is called at probe and resume time */
@@ -298,9 +295,6 @@ static int sd_start(struct gspca_dev *gspca_dev)
 	int ret;
 
 	/* create the JPEG header */
-	dev->jpeg_hdr = kmalloc(JPEG_HDR_SZ, GFP_KERNEL);
-	if (dev->jpeg_hdr == NULL)
-		return -ENOMEM;
 	jpeg_define(dev->jpeg_hdr, gspca_dev->height, gspca_dev->width,
 			0x21);          /* JPEG 422 */
 	jpeg_set_qual(dev->jpeg_hdr, dev->quality);
@@ -318,7 +312,7 @@ static int sd_start(struct gspca_dev *gspca_dev)
 }
 
 /* Table of supported USB devices */
-static const __devinitdata struct usb_device_id device_table[] = {
+static const struct usb_device_id device_table[] = {
 	{USB_DEVICE(0x0979, 0x0280)},
 	{}
 };
@@ -358,19 +352,12 @@ static struct usb_driver sd_driver = {
 /* -- module insert / remove -- */
 static int __init sd_mod_init(void)
 {
-	int ret;
-
-	ret = usb_register(&sd_driver);
-	if (ret < 0)
-		return ret;
-	PDEBUG(D_PROBE, "registered");
-	return 0;
+	return usb_register(&sd_driver);
 }
 
 static void __exit sd_mod_exit(void)
 {
 	usb_deregister(&sd_driver);
-	PDEBUG(D_PROBE, "deregistered");
 }
 
 module_init(sd_mod_init);

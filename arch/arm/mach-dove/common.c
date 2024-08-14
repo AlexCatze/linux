@@ -532,6 +532,11 @@ void __init dove_i2c_init(void)
 /*****************************************************************************
  * Time handling
  ****************************************************************************/
+void __init dove_init_early(void)
+{
+	orion_time_set_base(TIMER_VIRT_BASE);
+}
+
 static int get_tclk(void)
 {
 	/* use DOVE_RESET_SAMPLE_HI/LO to detect tclk */
@@ -540,7 +545,8 @@ static int get_tclk(void)
 
 static void dove_timer_init(void)
 {
-	orion_time_init(IRQ_DOVE_BRIDGE, get_tclk());
+	orion_time_init(BRIDGE_VIRT_BASE, BRIDGE_INT_TIMER1_CLR,
+			IRQ_DOVE_BRIDGE, get_tclk());
 }
 
 struct sys_timer dove_timer = {
@@ -750,6 +756,67 @@ void __init dove_xor1_init(void)
 	dma_cap_set(DMA_MEMSET, dove_xor11_data.cap_mask);
 	dma_cap_set(DMA_XOR, dove_xor11_data.cap_mask);
 	platform_device_register(&dove_xor11_channel);
+}
+
+/*****************************************************************************
+ * SDIO
+ ****************************************************************************/
+static u64 sdio_dmamask = DMA_BIT_MASK(32);
+
+static struct resource dove_sdio0_resources[] = {
+	{
+		.start	= DOVE_SDIO0_PHYS_BASE,
+		.end	= DOVE_SDIO0_PHYS_BASE + 0xff,
+		.flags	= IORESOURCE_MEM,
+	}, {
+		.start	= IRQ_DOVE_SDIO0,
+		.end	= IRQ_DOVE_SDIO0,
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device dove_sdio0 = {
+	.name		= "sdhci-dove",
+	.id		= 0,
+	.dev		= {
+		.dma_mask		= &sdio_dmamask,
+		.coherent_dma_mask	= DMA_BIT_MASK(32),
+	},
+	.resource	= dove_sdio0_resources,
+	.num_resources	= ARRAY_SIZE(dove_sdio0_resources),
+};
+
+void __init dove_sdio0_init(void)
+{
+	platform_device_register(&dove_sdio0);
+}
+
+static struct resource dove_sdio1_resources[] = {
+	{
+		.start	= DOVE_SDIO1_PHYS_BASE,
+		.end	= DOVE_SDIO1_PHYS_BASE + 0xff,
+		.flags	= IORESOURCE_MEM,
+	}, {
+		.start	= IRQ_DOVE_SDIO1,
+		.end	= IRQ_DOVE_SDIO1,
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device dove_sdio1 = {
+	.name		= "sdhci-dove",
+	.id		= 1,
+	.dev		= {
+		.dma_mask		= &sdio_dmamask,
+		.coherent_dma_mask	= DMA_BIT_MASK(32),
+	},
+	.resource	= dove_sdio1_resources,
+	.num_resources	= ARRAY_SIZE(dove_sdio1_resources),
+};
+
+void __init dove_sdio1_init(void)
+{
+	platform_device_register(&dove_sdio1);
 }
 
 void __init dove_init(void)

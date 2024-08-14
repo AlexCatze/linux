@@ -43,7 +43,7 @@ int __ref arch_register_cpu(int num)
 {
 #ifdef CONFIG_ACPI
 	/*
-	 * If CPEI can be re-targetted or if this is not
+	 * If CPEI can be re-targeted or if this is not
 	 * CPEI target, then it is hotpluggable
 	 */
 	if (can_cpei_retarget() || !is_cpu_cpei_target(num))
@@ -361,12 +361,12 @@ static int __cpuinit cache_add_dev(struct sys_device * sys_dev)
 		return 0;
 
 	oldmask = current->cpus_allowed;
-	retval = set_cpus_allowed(current, cpumask_of_cpu(cpu));
+	retval = set_cpus_allowed_ptr(current, cpumask_of(cpu));
 	if (unlikely(retval))
 		return retval;
 
 	retval = cpu_cache_sysfs_init(cpu);
-	set_cpus_allowed(current, oldmask);
+	set_cpus_allowed_ptr(current, &oldmask);
 	if (unlikely(retval < 0))
 		return retval;
 

@@ -96,13 +96,13 @@ int iio_store_to_sw_rb(struct iio_ring_buffer *r, u8 *data, s64 timestamp);
  * iio_rip_sw_rb() - attempt to read data from the ring buffer
  * @r:			ring buffer instance
  * @count:		number of datum's to try and read
- * @data:		where the data will be stored.
+ * @buf:		userspace buffer into which data is copied
  * @dead_offset:	how much of the stored data was possibly invalidated by
  *			the end of the copy.
  **/
 int iio_rip_sw_rb(struct iio_ring_buffer *r,
 		  size_t count,
-		  u8 **data,
+		  char __user *buf,
 		  int *dead_offset);
 
 /**
@@ -121,19 +121,19 @@ int iio_mark_update_needed_sw_rb(struct iio_ring_buffer *r);
 
 
 /**
- * iio_get_bpd_sw_rb() - get the datum size in bytes
+ * iio_get_bytes_per_datum_sw_rb() - get the datum size in bytes
  * @r:		pointer to a software ring buffer created by an
  *		iio_create_sw_rb call
  **/
-int iio_get_bpd_sw_rb(struct iio_ring_buffer *r);
+int iio_get_bytes_per_datum_sw_rb(struct iio_ring_buffer *r);
 
 /**
- * iio_set_bpd_sw_rb() - set the datum size in bytes
+ * iio_set_bytes_per_datum_sw_rb() - set the datum size in bytes
  * @r:		pointer to a software ring buffer created by an
  *		iio_create_sw_rb call
  * @bpd:	bytes per datum value
  **/
-int iio_set_bpd_sw_rb(struct iio_ring_buffer *r, size_t bpd);
+int iio_set_bytes_per_datum_sw_rb(struct iio_ring_buffer *r, size_t bpd);
 
 /**
  * iio_get_length_sw_rb() - get how many datums the rb may contain
@@ -166,8 +166,8 @@ static inline void iio_ring_sw_register_funcs(struct iio_ring_access_funcs *ra)
 	ra->mark_param_change = &iio_mark_update_needed_sw_rb;
 	ra->request_update = &iio_request_update_sw_rb;
 
-	ra->get_bpd = &iio_get_bpd_sw_rb;
-	ra->set_bpd = &iio_set_bpd_sw_rb;
+	ra->get_bytes_per_datum = &iio_get_bytes_per_datum_sw_rb;
+	ra->set_bytes_per_datum = &iio_set_bytes_per_datum_sw_rb;
 
 	ra->get_length = &iio_get_length_sw_rb;
 	ra->set_length = &iio_set_length_sw_rb;
@@ -207,10 +207,21 @@ struct iio_sw_ring_buffer {
 struct iio_ring_buffer *iio_sw_rb_allocate(struct iio_dev *indio_dev);
 void iio_sw_rb_free(struct iio_ring_buffer *ring);
 
+int iio_sw_ring_preenable(struct iio_dev *indio_dev);
 
+struct iio_sw_ring_helper_state {
+	struct work_struct		work_trigger_to_ring;
+	struct iio_dev			*indio_dev;
+	int (*get_ring_element)(struct iio_sw_ring_helper_state *st, u8 *buf);
+	s64				last_timestamp;
+};
+
+void iio_sw_poll_func_th(struct iio_dev *indio_dev, s64 time);
+void iio_sw_trigger_bh_to_ring(struct work_struct *work_s);
 
 #else /* CONFIG_IIO_RING_BUFFER*/
-static inline void iio_ring_sw_register_funcs(struct iio_ring_access_funcs *ra)
-{};
+struct iio_sw_ring_helper_state {
+	struct iio_dev			*indio_dev;
+};
 #endif /* !CONFIG_IIO_RING_BUFFER */
 #endif /* _IIO_RING_SW_H_ */

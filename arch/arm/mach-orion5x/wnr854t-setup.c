@@ -172,11 +172,10 @@ subsys_initcall(wnr854t_pci_init);
 
 MACHINE_START(WNR854T, "Netgear WNR854T")
 	/* Maintainer: Imre Kaloz <kaloz@openwrt.org> */
-	.phys_io	= ORION5X_REGS_PHYS_BASE,
-	.io_pg_offst	= ((ORION5X_REGS_VIRT_BASE) >> 18) & 0xFFFC,
 	.boot_params	= 0x00000100,
 	.init_machine	= wnr854t_init,
 	.map_io		= orion5x_map_io,
+	.init_early	= orion5x_init_early,
 	.init_irq	= orion5x_init_irq,
 	.timer		= &orion5x_timer,
 	.fixup		= tag_fixup_mem32,

@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2006 Silicon Motion Technology Corp.
  * Authors: Ge Wang, gewang@siliconmotion.com
- * 	    Boyod boyod.yang@siliconmotion.com.cn
+ *	    Boyod boyod.yang@siliconmotion.com.cn
  *
  * Copyright (C) 2009 Lemote, Inc.
  * Author: Wu Zhangjin, wuzhangjin@gmail.com
@@ -13,22 +13,18 @@
  *  more details.
  *
  * Version 0.10.26192.21.01
- * 	- Add PowerPC/Big endian support
- * 	- Add 2D support for Lynx
- * 	- Verified on2.6.19.2  Boyod.yang <boyod.yang@siliconmotion.com.cn>
+ *	- Add PowerPC/Big endian support
+ *	- Add 2D support for Lynx
+ *	- Verified on2.6.19.2  Boyod.yang <boyod.yang@siliconmotion.com.cn>
  *
  * Version 0.09.2621.00.01
- * 	- Only support Linux Kernel's version 2.6.21.
+ *	- Only support Linux Kernel's version 2.6.21.
  *	Boyod.yang  <boyod.yang@siliconmotion.com.cn>
  *
  * Version 0.09
- * 	- Only support Linux Kernel's version 2.6.12.
- * 	Boyod.yang <boyod.yang@siliconmotion.com.cn>
+ *	- Only support Linux Kernel's version 2.6.12.
+ *	Boyod.yang <boyod.yang@siliconmotion.com.cn>
  */
-
-#ifndef __KERNEL__
-#define __KERNEL__
-#endif
 
 #include <linux/io.h>
 #include <linux/fb.h>
@@ -688,12 +684,10 @@ static struct smtcfb_info *smtc_alloc_fb_info(struct pci_dev *dev,
 {
 	struct smtcfb_info *sfb;
 
-	sfb = kmalloc(sizeof(struct smtcfb_info), GFP_KERNEL);
+	sfb = kzalloc(sizeof(struct smtcfb_info), GFP_KERNEL);
 
 	if (!sfb)
 		return NULL;
-
-	memset(sfb, 0, sizeof(struct smtcfb_info));
 
 	sfb->currcon = -1;
 	sfb->dev = dev;
@@ -837,7 +831,7 @@ __setup("vga=", sm712vga_setup);
  * Original init function changed to probe method to be used by pci_drv
  * process used to detect chips replaced with kernel process in pci_drv
  */
-static int __init smtcfb_pci_probe(struct pci_dev *pdev,
+static int __devinit smtcfb_pci_probe(struct pci_dev *pdev,
 				   const struct pci_device_id *ent)
 {
 	struct smtcfb_info *sfb;
@@ -850,7 +844,6 @@ static int __init smtcfb_pci_probe(struct pci_dev *pdev,
 		"Silicon Motion display driver " SMTC_LINUX_FB_VERSION "\n");
 
 	err = pci_enable_device(pdev);	/* enable SMTC chip */
-
 	if (err)
 		return err;
 	err = -ENOMEM;
@@ -861,7 +854,7 @@ static int __init smtcfb_pci_probe(struct pci_dev *pdev,
 	sfb = smtc_alloc_fb_info(pdev, name);
 
 	if (!sfb)
-		goto failed;
+		goto failed_free;
 	/* Jason (08/13/2009)
 	 * Store fb_info to be further used when suspending and resuming
 	 */
@@ -919,7 +912,8 @@ static int __init smtcfb_pci_probe(struct pci_dev *pdev,
 			printk(KERN_INFO
 				"%s: unable to map memory mapped IO\n",
 				sfb->fb.fix.id);
-			return -ENOMEM;
+			err = -ENOMEM;
+			goto failed_fb;
 		}
 
 		/* set MCLK = 14.31818 * (0x16 / 0x2) */
@@ -953,8 +947,7 @@ static int __init smtcfb_pci_probe(struct pci_dev *pdev,
 		printk(KERN_INFO
 		"No valid Silicon Motion display chip was detected!\n");
 
-		smtc_free_fb_info(sfb);
-		return err;
+		goto failed_fb;
 	}
 
 	/* can support 32 bpp */
@@ -968,7 +961,7 @@ static int __init smtcfb_pci_probe(struct pci_dev *pdev,
 		goto failed;
 
 	smtcfb_setmode(sfb);
-	/* Primary display starting from 0 postion */
+	/* Primary display starting from 0 position */
 	hw.BaseAddressInVRAM = 0;
 	sfb->fb.par = &hw;
 
@@ -988,14 +981,18 @@ static int __init smtcfb_pci_probe(struct pci_dev *pdev,
 
 	smtc_unmap_smem(sfb);
 	smtc_unmap_mmio(sfb);
+failed_fb:
 	smtc_free_fb_info(sfb);
+
+failed_free:
+	pci_disable_device(pdev);
 
 	return err;
 }
 
 
 /* Jason (08/11/2009) PCI_DRV wrapper essential structs */
-static const struct pci_device_id smtcfb_pci_table[] = {
+static DEFINE_PCI_DEVICE_TABLE(smtcfb_pci_table) = {
 	{0x126f, 0x710, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
 	{0x126f, 0x712, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
 	{0x126f, 0x720, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
@@ -1018,6 +1015,7 @@ static void __devexit smtcfb_pci_remove(struct pci_dev *pdev)
 	smtc_free_fb_info(sfb);
 }
 
+#ifdef CONFIG_PM
 /* Jason (08/14/2009)
  * suspend function, called when the suspend event is triggered
  */
@@ -1043,9 +1041,9 @@ static int __maybe_unused smtcfb_suspend(struct pci_dev *pdev, pm_message_t msg)
 
 	/* when doing suspend, call fb apis and pci apis */
 	if (msg.event == PM_EVENT_SUSPEND) {
-		acquire_console_sem();
+		console_lock();
 		fb_set_suspend(&sfb->fb, 1);
-		release_console_sem();
+		console_unlock();
 		retv = pci_save_state(pdev);
 		pci_disable_device(pdev);
 		retv = pci_choose_state(pdev, msg);
@@ -1054,7 +1052,7 @@ static int __maybe_unused smtcfb_suspend(struct pci_dev *pdev, pm_message_t msg)
 
 	pdev->dev.power.power_state = msg;
 
-	/* additionaly turn off all function blocks including internal PLLs */
+	/* additionally turn off all function blocks including internal PLLs */
 	smtc_seqw(0x21, 0xff);
 
 	return 0;
@@ -1070,7 +1068,7 @@ static int __maybe_unused smtcfb_resume(struct pci_dev *pdev)
 	/* when resuming, restore pci data and fb cursor */
 	if (pdev->dev.power.power_state.event != PM_EVENT_FREEZE) {
 		retv = pci_set_power_state(pdev, PCI_D0);
-		retv = pci_restore_state(pdev);
+		pci_restore_state(pdev);
 		if (pci_enable_device(pdev))
 			return -1;
 		pci_set_master(pdev);
@@ -1104,12 +1102,13 @@ static int __maybe_unused smtcfb_resume(struct pci_dev *pdev)
 
 	smtcfb_setmode(sfb);
 
-	acquire_console_sem();
+	console_lock();
 	fb_set_suspend(&sfb->fb, 0);
-	release_console_sem();
+	console_unlock();
 
 	return 0;
 }
+#endif
 
 /* Jason (08/13/2009)
  * pci_driver struct used to wrap the original driver

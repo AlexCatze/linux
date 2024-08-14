@@ -12,7 +12,6 @@
 #include <asm/processor.h>
 #include <asm/pgtable.h>
 #include <asm/msr.h>
-#include <asm/ds.h>
 #include <asm/bugs.h>
 #include <asm/cpu.h>
 
@@ -40,6 +39,7 @@ static void __cpuinit early_init_intel(struct cpuinfo_x86 *c)
 			misc_enable &= ~MSR_IA32_MISC_ENABLE_LIMIT_CPUID;
 			wrmsrl(MSR_IA32_MISC_ENABLE, misc_enable);
 			c->cpuid_level = cpuid_eax(0);
+			get_cpu_cap(c);
 		}
 	}
 
@@ -170,7 +170,7 @@ static void __cpuinit intel_smp_check(struct cpuinfo_x86 *c)
 {
 #ifdef CONFIG_SMP
 	/* calling is from identify_secondary_cpu() ? */
-	if (c->cpu_index == boot_cpu_id)
+	if (!c->cpu_index)
 		return;
 
 	/*
@@ -276,17 +276,14 @@ static void __cpuinit intel_workarounds(struct cpuinfo_x86 *c)
 
 static void __cpuinit srat_detect_node(struct cpuinfo_x86 *c)
 {
-#if defined(CONFIG_NUMA) && defined(CONFIG_X86_64)
+#ifdef CONFIG_NUMA
 	unsigned node;
 	int cpu = smp_processor_id();
-	int apicid = cpu_has_apic ? hard_smp_processor_id() : c->apicid;
 
 	/* Don't do the funky fallback heuristics the AMD version employs
 	   for now. */
-	node = apicid_to_node[apicid];
-	if (node == NUMA_NO_NODE)
-		node = first_node(node_online_map);
-	else if (!node_online(node)) {
+	node = numa_cpu_node(cpu);
+	if (node == NUMA_NO_NODE || !node_online(node)) {
 		/* reuse the value from init_cpu_to_node() */
 		node = cpu_to_node(cpu);
 	}
@@ -373,12 +370,6 @@ static void __cpuinit init_intel(struct cpuinfo_x86 *c)
 			set_cpu_cap(c, X86_FEATURE_ARCH_PERFMON);
 	}
 
-	if (c->cpuid_level > 6) {
-		unsigned ecx = cpuid_ecx(6);
-		if (ecx & 0x01)
-			set_cpu_cap(c, X86_FEATURE_APERFMPERF);
-	}
-
 	if (cpu_has_xmm2)
 		set_cpu_cap(c, X86_FEATURE_LFENCE_RDTSC);
 	if (cpu_has_ds) {
@@ -388,7 +379,6 @@ static void __cpuinit init_intel(struct cpuinfo_x86 *c)
 			set_cpu_cap(c, X86_FEATURE_BTS);
 		if (!(l1 & (1<<12)))
 			set_cpu_cap(c, X86_FEATURE_PEBS);
-		ds_init_intel(c);
 	}
 
 	if (c->x86 == 6 && c->x86_model == 29 && cpu_has_clflush)

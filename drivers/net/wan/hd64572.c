@@ -293,6 +293,7 @@ static inline void sca_tx_done(port_t *port)
 	struct net_device *dev = port->netdev;
 	card_t* card = port->card;
 	u8 stat;
+	unsigned count = 0;
 
 	spin_lock(&port->lock);
 
@@ -316,10 +317,12 @@ static inline void sca_tx_done(port_t *port)
 			dev->stats.tx_bytes += readw(&desc->len);
 		}
 		writeb(0, &desc->stat);	/* Free descriptor */
+		count++;
 		port->txlast = (port->txlast + 1) % card->tx_ring_buffers;
 	}
 
-	netif_wake_queue(dev);
+	if (count)
+		netif_wake_queue(dev);
 	spin_unlock(&port->lock);
 }
 
@@ -585,7 +588,6 @@ static netdev_tx_t sca_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	writew(len, &desc->len);
 	writeb(ST_TX_EOM, &desc->stat);
-	dev->trans_start = jiffies;
 
 	port->txin = (port->txin + 1) % card->tx_ring_buffers;
 	sca_outl(desc_offset(port, port->txin, 1),

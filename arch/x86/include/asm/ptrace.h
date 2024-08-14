@@ -73,7 +73,7 @@ struct pt_regs {
 	unsigned long r12;
 	unsigned long rbp;
 	unsigned long rbx;
-/* arguments: non interrupts/non tracing syscalls only save upto here*/
+/* arguments: non interrupts/non tracing syscalls only save up to here*/
 	unsigned long r11;
 	unsigned long r10;
 	unsigned long r9;
@@ -103,7 +103,7 @@ struct pt_regs {
 	unsigned long r12;
 	unsigned long bp;
 	unsigned long bx;
-/* arguments: non interrupts/non tracing syscalls only save upto here*/
+/* arguments: non interrupts/non tracing syscalls only save up to here*/
 	unsigned long r11;
 	unsigned long r10;
 	unsigned long r9;
@@ -288,12 +288,6 @@ extern int do_get_thread_area(struct task_struct *p, int idx,
 			      struct user_desc __user *info);
 extern int do_set_thread_area(struct task_struct *p, int idx,
 			      struct user_desc __user *info, int can_allocate);
-
-#ifdef CONFIG_X86_PTRACE_BTS
-extern void ptrace_bts_untrace(struct task_struct *tsk);
-
-#define arch_ptrace_untrace(tsk)	ptrace_bts_untrace(tsk)
-#endif /* CONFIG_X86_PTRACE_BTS */
 
 #endif /* __KERNEL__ */
 

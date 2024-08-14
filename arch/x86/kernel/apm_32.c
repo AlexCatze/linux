@@ -66,7 +66,7 @@
  *    1.5: Fix segment register reloading (in case of bad segments saved
  *         across BIOS call).
  *         Stephen Rothwell
- *    1.6: Cope with complier/assembler differences.
+ *    1.6: Cope with compiler/assembler differences.
  *         Only try to turn off the first display device.
  *         Fix OOPS at power off with no APM BIOS by Jan Echternach
  *                   <echter@informatik.uni-rostock.de>
@@ -140,7 +140,7 @@
  *         is now the way life works).
  *         Fix thinko in suspend() (wrong return).
  *         Notify drivers on critical suspend.
- *         Make kapmd absorb more idle time (Pavel Machek <pavel@suse.cz>
+ *         Make kapmd absorb more idle time (Pavel Machek <pavel@ucw.cz>
  *         modified by sfr).
  *         Disable interrupts while we are suspended (Andy Henroid
  *         <andy_henroid@yahoo.com> fixed by sfr).
@@ -189,8 +189,8 @@
  *   Intel Order Number 241704-001.  Microsoft Part Number 781-110-X01.
  *
  * [This document is available free from Intel by calling 800.628.8686 (fax
- * 916.356.6100) or 800.548.4725; or via anonymous ftp from
- * ftp://ftp.intel.com/pub/IAL/software_specs/apmv11.doc.  It is also
+ * 916.356.6100) or 800.548.4725; or from
+ * http://www.microsoft.com/whdc/archive/amp_12.mspx  It is also
  * available from Microsoft by calling 206.882.8080.]
  *
  * APM 1.2 Reference:
@@ -227,6 +227,8 @@
 #include <linux/suspend.h>
 #include <linux/kthread.h>
 #include <linux/jiffies.h>
+#include <linux/acpi.h>
+#include <linux/syscore_ops.h>
 
 #include <asm/system.h>
 #include <asm/uaccess.h>
@@ -975,20 +977,10 @@ recalc:
 
 static void apm_power_off(void)
 {
-	unsigned char po_bios_call[] = {
-		0xb8, 0x00, 0x10,	/* movw  $0x1000,ax  */
-		0x8e, 0xd0,		/* movw  ax,ss       */
-		0xbc, 0x00, 0xf0,	/* movw  $0xf000,sp  */
-		0xb8, 0x07, 0x53,	/* movw  $0x5307,ax  */
-		0xbb, 0x01, 0x00,	/* movw  $0x0001,bx  */
-		0xb9, 0x03, 0x00,	/* movw  $0x0003,cx  */
-		0xcd, 0x15		/* int   $0x15       */
-	};
-
 	/* Some bioses don't like being called from CPU != 0 */
 	if (apm_info.realmode_power_off) {
 		set_cpus_allowed_ptr(current, cpumask_of(0));
-		machine_real_restart(po_bios_call, sizeof(po_bios_call));
+		machine_real_restart(MRR_APM);
 	} else {
 		(void)set_system_power_state(APM_STATE_OFF);
 	}
@@ -1224,7 +1216,7 @@ static void reinit_timer(void)
 #ifdef INIT_TIMER_AFTER_SUSPEND
 	unsigned long flags;
 
-	spin_lock_irqsave(&i8253_lock, flags);
+	raw_spin_lock_irqsave(&i8253_lock, flags);
 	/* set the clock to HZ */
 	outb_pit(0x34, PIT_MODE);		/* binary, mode 2, LSB/MSB, ch 0 */
 	udelay(10);
@@ -1232,7 +1224,7 @@ static void reinit_timer(void)
 	udelay(10);
 	outb_pit(LATCH >> 8, PIT_CH0);	/* MSB */
 	udelay(10);
-	spin_unlock_irqrestore(&i8253_lock, flags);
+	raw_spin_unlock_irqrestore(&i8253_lock, flags);
 #endif
 }
 
@@ -1247,6 +1239,7 @@ static int suspend(int vetoable)
 
 	local_irq_disable();
 	sysdev_suspend(PMSG_SUSPEND);
+	syscore_suspend();
 
 	local_irq_enable();
 
@@ -1264,6 +1257,7 @@ static int suspend(int vetoable)
 		apm_error("suspend", err);
 	err = (err == APM_SUCCESS) ? 0 : -EIO;
 
+	syscore_resume();
 	sysdev_resume();
 	local_irq_enable();
 
@@ -1289,6 +1283,7 @@ static void standby(void)
 
 	local_irq_disable();
 	sysdev_suspend(PMSG_SUSPEND);
+	syscore_suspend();
 	local_irq_enable();
 
 	err = set_system_power_state(APM_STATE_STANDBY);
@@ -1296,6 +1291,7 @@ static void standby(void)
 		apm_error("standby", err);
 
 	local_irq_disable();
+	syscore_resume();
 	sysdev_resume();
 	local_irq_enable();
 
@@ -1926,6 +1922,7 @@ static const struct file_operations apm_bios_fops = {
 	.unlocked_ioctl	= do_ioctl,
 	.open		= do_open,
 	.release	= do_release,
+	.llseek		= noop_llseek,
 };
 
 static struct miscdevice apm_device = {
@@ -2330,12 +2327,11 @@ static int __init apm_init(void)
 		apm_info.disabled = 1;
 		return -ENODEV;
 	}
-	if (pm_flags & PM_ACPI) {
+	if (!acpi_disabled) {
 		printk(KERN_NOTICE "apm: overridden by ACPI.\n");
 		apm_info.disabled = 1;
 		return -ENODEV;
 	}
-	pm_flags |= PM_APM;
 
 	/*
 	 * Set up the long jump entry point to the APM BIOS, which is called
@@ -2427,7 +2423,6 @@ static void __exit apm_exit(void)
 		kthread_stop(kapmd_task);
 		kapmd_task = NULL;
 	}
-	pm_flags &= ~PM_APM;
 }
 
 module_init(apm_init);

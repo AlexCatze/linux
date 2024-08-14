@@ -550,10 +550,9 @@ static int mb862xx_gdc_init(struct mb862xxfb_par *par)
 	return 0;
 }
 
-static int __devinit of_platform_mb862xx_probe(struct of_device *ofdev,
-					       const struct of_device_id *id)
+static int __devinit of_platform_mb862xx_probe(struct platform_device *ofdev)
 {
-	struct device_node *np = ofdev->node;
+	struct device_node *np = ofdev->dev.of_node;
 	struct device *dev = &ofdev->dev;
 	struct mb862xxfb_par *par;
 	struct fb_info *info;
@@ -669,7 +668,7 @@ fbrel:
 	return ret;
 }
 
-static int __devexit of_platform_mb862xx_remove(struct of_device *ofdev)
+static int __devexit of_platform_mb862xx_remove(struct platform_device *ofdev)
 {
 	struct fb_info *fbi = dev_get_drvdata(&ofdev->dev);
 	struct mb862xxfb_par *par = fbi->par;
@@ -717,10 +716,12 @@ static struct of_device_id __devinitdata of_platform_mb862xx_tbl[] = {
 	{ /* end */ }
 };
 
-static struct of_platform_driver of_platform_mb862xxfb_driver = {
-	.owner		= THIS_MODULE,
-	.name		= DRV_NAME,
-	.match_table	= of_platform_mb862xx_tbl,
+static struct platform_driver of_platform_mb862xxfb_driver = {
+	.driver = {
+		.name = DRV_NAME,
+		.owner = THIS_MODULE,
+		.of_match_table = of_platform_mb862xx_tbl,
+	},
 	.probe		= of_platform_mb862xx_probe,
 	.remove		= __devexit_p(of_platform_mb862xx_remove),
 };
@@ -1036,7 +1037,7 @@ static int __devinit mb862xxfb_init(void)
 	int ret = -ENODEV;
 
 #if defined(CONFIG_FB_MB862XX_LIME)
-	ret = of_register_platform_driver(&of_platform_mb862xxfb_driver);
+	ret = platform_driver_register(&of_platform_mb862xxfb_driver);
 #endif
 #if defined(CONFIG_FB_MB862XX_PCI_GDC)
 	ret = pci_register_driver(&mb862xxfb_pci_driver);
@@ -1047,7 +1048,7 @@ static int __devinit mb862xxfb_init(void)
 static void __exit mb862xxfb_exit(void)
 {
 #if defined(CONFIG_FB_MB862XX_LIME)
-	of_unregister_platform_driver(&of_platform_mb862xxfb_driver);
+	platform_driver_unregister(&of_platform_mb862xxfb_driver);
 #endif
 #if defined(CONFIG_FB_MB862XX_PCI_GDC)
 	pci_unregister_driver(&mb862xxfb_pci_driver);

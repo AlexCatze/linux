@@ -12,7 +12,7 @@
 /*
  * RX HW/SW interaction overview
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- * There are 2 types of RX communication channels betwean driver and NIC.
+ * There are 2 types of RX communication channels between driver and NIC.
  * 1) RX Free Fifo - RXF - holds descriptors of empty buffers to accept incoming
  * traffic. This Fifo is filled by SW and is readen by HW. Each descriptor holds
  * info about buffer's location, size and ID. An ID field is used to identify a
@@ -92,7 +92,7 @@ static void bdx_rx_free(struct bdx_priv *priv);
 static void bdx_tx_free(struct bdx_priv *priv);
 
 /* Definitions needed by bdx_probe */
-static void bdx_ethtool_ops(struct net_device *netdev);
+static void bdx_set_ethtool_ops(struct net_device *netdev);
 
 /*************************************************************************
  *    Print Info                                                         *
@@ -324,7 +324,7 @@ static int bdx_fw_load(struct bdx_priv *priv)
 	ENTER;
 	master = READ_REG(priv, regINIT_SEMAPHORE);
 	if (!READ_REG(priv, regINIT_STATUS) && master) {
-		rc = request_firmware(&fw, "tehuti/firmware.bin", &priv->pdev->dev);
+		rc = request_firmware(&fw, "tehuti/bdx.bin", &priv->pdev->dev);
 		if (rc)
 			goto out;
 		bdx_tx_push_desc_safe(priv, (char *)fw->data, fw->size);
@@ -645,8 +645,8 @@ static int bdx_ioctl_priv(struct net_device *ndev, struct ifreq *ifr, int cmd)
 	if (cmd != SIOCDEVPRIVATE) {
 		error = copy_from_user(data, ifr->ifr_data, sizeof(data));
 		if (error) {
-			pr_err("cant copy from user\n");
-			RET(error);
+			pr_err("can't copy from user\n");
+			RET(-EFAULT);
 		}
 		DBG("%d 0x%x 0x%x\n", data[0], data[1], data[2]);
 	}
@@ -665,7 +665,7 @@ static int bdx_ioctl_priv(struct net_device *ndev, struct ifreq *ifr, int cmd)
 		    data[2]);
 		error = copy_to_user(ifr->ifr_data, data, sizeof(data));
 		if (error)
-			RET(error);
+			RET(-EFAULT);
 		break;
 
 	case BDX_OP_WRITE:
@@ -808,7 +808,7 @@ static void bdx_setmulti(struct net_device *ndev)
 			WRITE_REG(priv, regRX_MCST_HASH0 + i * 4, ~0);
 	} else if (!netdev_mc_empty(ndev)) {
 		u8 hash;
-		struct dev_mc_list *mclist;
+		struct netdev_hw_addr *ha;
 		u32 reg, val;
 
 		/* set IMF to deny all multicast frames */
@@ -821,14 +821,14 @@ static void bdx_setmulti(struct net_device *ndev)
 		}
 
 		/* use PMF to accept first MAC_MCST_NUM (15) addresses */
-		/* TBD: sort addreses and write them in ascending order
+		/* TBD: sort addresses and write them in ascending order
 		 * into RX_MAC_MCST regs. we skip this phase now and accept ALL
 		 * multicast frames throu IMF */
 		/* accept the rest of addresses throu IMF */
-		netdev_for_each_mc_addr(mclist, ndev) {
+		netdev_for_each_mc_addr(ha, ndev) {
 			hash = 0;
 			for (i = 0; i < ETH_ALEN; i++)
-				hash ^= mclist->dmi_addr[i];
+				hash ^= ha->addr[i];
 			reg = regRX_MCST_HASH0 + ((hash >> 5) << 2);
 			val = READ_REG(priv, reg);
 			val |= (1 << (hash % 32));
@@ -927,13 +927,6 @@ static void bdx_update_stats(struct bdx_priv *priv)
 	BDX_ASSERT((sizeof(struct bdx_stats) / sizeof(u64)) != i);
 }
 
-static struct net_device_stats *bdx_get_stats(struct net_device *ndev)
-{
-	struct bdx_priv *priv = netdev_priv(ndev);
-	struct net_device_stats *net_stat = &priv->net_stats;
-	return net_stat;
-}
-
 static void print_rxdd(struct rxd_desc *rxdd, u32 rxd_val1, u16 len,
 		       u16 rxd_vlan);
 static void print_rxfd(struct rxf_desc *rxfd);
@@ -1006,7 +999,7 @@ static inline void bdx_rxdb_free_elem(struct rxdb *db, int n)
  *
  * RxD fifo is smaller than RxF fifo by design. Upon high load, RxD will be
  * filled and packets will be dropped by nic without getting into host or
- * cousing interrupt. Anyway, in that condition, host has no chance to proccess
+ * cousing interrupt. Anyway, in that condition, host has no chance to process
  * all packets, but dropping in nic is cheaper, since it takes 0 cpu cycles
  */
 
@@ -1207,8 +1200,8 @@ static void bdx_recycle_skb(struct bdx_priv *priv, struct rxd_desc *rxdd)
 	RET();
 }
 
-/* bdx_rx_receive - recieves full packets from RXD fifo and pass them to OS
- * NOTE: a special treatment is given to non-continous descriptors
+/* bdx_rx_receive - receives full packets from RXD fifo and pass them to OS
+ * NOTE: a special treatment is given to non-continuous descriptors
  * that start near the end, wraps around and continue at the beginning. a second
  * part is copied right after the first, and then descriptor is interpreted as
  * normal. fifo has an extra space to allow such operations
@@ -1220,6 +1213,7 @@ static void bdx_recycle_skb(struct bdx_priv *priv, struct rxd_desc *rxdd)
 
 static int bdx_rx_receive(struct bdx_priv *priv, struct rxd_fifo *f, int budget)
 {
+	struct net_device *ndev = priv->ndev;
 	struct sk_buff *skb, *skb2;
 	struct rxd_desc *rxdd;
 	struct rx_map *dm;
@@ -1273,7 +1267,7 @@ static int bdx_rx_receive(struct bdx_priv *priv, struct rxd_fifo *f, int budget)
 
 		if (unlikely(GET_RXD_ERR(rxd_val1))) {
 			DBG("rxd_err = 0x%x\n", GET_RXD_ERR(rxd_val1));
-			priv->net_stats.rx_errors++;
+			ndev->stats.rx_errors++;
 			bdx_recycle_skb(priv, rxdd);
 			continue;
 		}
@@ -1300,16 +1294,16 @@ static int bdx_rx_receive(struct bdx_priv *priv, struct rxd_fifo *f, int budget)
 			bdx_rxdb_free_elem(db, rxdd->va_lo);
 		}
 
-		priv->net_stats.rx_bytes += len;
+		ndev->stats.rx_bytes += len;
 
 		skb_put(skb, len);
-		skb->dev = priv->ndev;
-		skb->ip_summed = CHECKSUM_UNNECESSARY;
-		skb->protocol = eth_type_trans(skb, priv->ndev);
+		skb->protocol = eth_type_trans(skb, ndev);
 
 		/* Non-IP packets aren't checksum-offloaded */
 		if (GET_RXD_PKT_ID(rxd_val1) == 0)
-			skb->ip_summed = CHECKSUM_NONE;
+			skb_checksum_none_assert(skb);
+		else
+			skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 		NETIF_RX_MUX(priv, rxd_val1, rxd_vlan, skb);
 
@@ -1317,7 +1311,7 @@ static int bdx_rx_receive(struct bdx_priv *priv, struct rxd_fifo *f, int budget)
 			break;
 	}
 
-	priv->net_stats.rx_packets += done;
+	ndev->stats.rx_packets += done;
 
 	/* FIXME: do smth to minimize pci accesses    */
 	WRITE_REG(priv, f->m.reg_RPTR, f->m.rptr & TXF_WPTR_WR_PTR);
@@ -1352,7 +1346,7 @@ static void print_rxfd(struct rxf_desc *rxfd)
 /*
  * TX HW/SW interaction overview
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- * There are 2 types of TX communication channels betwean driver and NIC.
+ * There are 2 types of TX communication channels between driver and NIC.
  * 1) TX Free Fifo - TXF - holds ack descriptors for sent packets
  * 2) TX Data Fifo - TXD - holds descriptors of full buffers.
  *
@@ -1509,7 +1503,7 @@ bdx_tx_map_skb(struct bdx_priv *priv, struct sk_buff *skb,
 	int nr_frags = skb_shinfo(skb)->nr_frags;
 	int i;
 
-	db->wptr->len = skb->len - skb->data_len;
+	db->wptr->len = skb_headlen(skb);
 	db->wptr->addr.dma = pci_map_single(priv->pdev, skb->data,
 					    db->wptr->len, PCI_DMA_TODEVICE);
 	pbl->len = CPU_CHIP_SWAP32(db->wptr->len);
@@ -1590,9 +1584,9 @@ err_mem:
 }
 
 /*
- * bdx_tx_space - calculates avalable space in TX fifo
+ * bdx_tx_space - calculates available space in TX fifo
  * @priv - NIC private structure
- * Returns avaliable space in TX fifo in bytes
+ * Returns available space in TX fifo in bytes
  */
 static inline int bdx_tx_space(struct bdx_priv *priv)
 {
@@ -1713,8 +1707,8 @@ static netdev_tx_t bdx_tx_transmit(struct sk_buff *skb,
 #ifdef BDX_LLTX
 	ndev->trans_start = jiffies; /* NETIF_F_LLTX driver :( */
 #endif
-	priv->net_stats.tx_packets++;
-	priv->net_stats.tx_bytes += skb->len;
+	ndev->stats.tx_packets++;
+	ndev->stats.tx_bytes += skb->len;
 
 	if (priv->tx_level < BDX_MIN_TX_LEVEL) {
 		DBG("%s: %s: TX Q STOP level %d\n",
@@ -1889,7 +1883,6 @@ static const struct net_device_ops bdx_netdev_ops = {
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_do_ioctl		= bdx_ioctl,
 	.ndo_set_multicast_list = bdx_setmulti,
-	.ndo_get_stats		= bdx_get_stats,
 	.ndo_change_mtu		= bdx_change_mtu,
 	.ndo_set_mac_address	= bdx_set_mac,
 	.ndo_vlan_rx_register	= bdx_vlan_rx_register,
@@ -2013,7 +2006,7 @@ bdx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		ndev->netdev_ops = &bdx_netdev_ops;
 		ndev->tx_queue_len = BDX_NDEV_TXQ_LEN;
 
-		bdx_ethtool_ops(ndev);	/* ethtool interface */
+		bdx_set_ethtool_ops(ndev);	/* ethtool interface */
 
 		/* these fields are used for info purposes only
 		 * so we can have them same for all ports of the board */
@@ -2034,7 +2027,6 @@ bdx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	/************** priv ****************/
 		priv = nic->priv[port] = netdev_priv(ndev);
 
-		memset(priv, 0, sizeof(struct bdx_priv));
 		priv->pBdxRegs = nic->regs + port * 0x8000;
 		priv->port = port;
 		priv->pdev = pdev;
@@ -2419,10 +2411,10 @@ static void bdx_get_ethtool_stats(struct net_device *netdev,
 }
 
 /*
- * bdx_ethtool_ops - ethtool interface implementation
+ * bdx_set_ethtool_ops - ethtool interface implementation
  * @netdev
  */
-static void bdx_ethtool_ops(struct net_device *netdev)
+static void bdx_set_ethtool_ops(struct net_device *netdev)
 {
 	static const struct ethtool_ops bdx_ethtool_ops = {
 		.get_settings = bdx_get_settings,
@@ -2518,4 +2510,4 @@ module_exit(bdx_module_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(BDX_DRV_DESC);
-MODULE_FIRMWARE("tehuti/firmware.bin");
+MODULE_FIRMWARE("tehuti/bdx.bin");

@@ -29,6 +29,8 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
+#include <linux/slab.h>
+#include <linux/sysdev.h>
 
 #include <asm/irq_cpu.h>
 #include <asm/mipsregs.h>
@@ -37,7 +39,7 @@
 #include <asm/mach-pb1x00/pb1000.h>
 #endif
 
-static int au1x_ic_settype(unsigned int irq, unsigned int flow_type);
+static int au1x_ic_settype(struct irq_data *d, unsigned int flow_type);
 
 /* NOTE on interrupt priorities: The original writers of this code said:
  *
@@ -216,101 +218,17 @@ struct au1xxx_irqmap au1200_irqmap[] __initdata = {
 };
 
 
-#ifdef CONFIG_PM
-
-/*
- * Save/restore the interrupt controller state.
- * Called from the save/restore core registers as part of the
- * au_sleep function in power.c.....maybe I should just pm_register()
- * them instead?
- */
-static unsigned int	sleep_intctl_config0[2];
-static unsigned int	sleep_intctl_config1[2];
-static unsigned int	sleep_intctl_config2[2];
-static unsigned int	sleep_intctl_src[2];
-static unsigned int	sleep_intctl_assign[2];
-static unsigned int	sleep_intctl_wake[2];
-static unsigned int	sleep_intctl_mask[2];
-
-void save_au1xxx_intctl(void)
+static void au1x_ic0_unmask(struct irq_data *d)
 {
-	sleep_intctl_config0[0] = au_readl(IC0_CFG0RD);
-	sleep_intctl_config1[0] = au_readl(IC0_CFG1RD);
-	sleep_intctl_config2[0] = au_readl(IC0_CFG2RD);
-	sleep_intctl_src[0] = au_readl(IC0_SRCRD);
-	sleep_intctl_assign[0] = au_readl(IC0_ASSIGNRD);
-	sleep_intctl_wake[0] = au_readl(IC0_WAKERD);
-	sleep_intctl_mask[0] = au_readl(IC0_MASKRD);
-
-	sleep_intctl_config0[1] = au_readl(IC1_CFG0RD);
-	sleep_intctl_config1[1] = au_readl(IC1_CFG1RD);
-	sleep_intctl_config2[1] = au_readl(IC1_CFG2RD);
-	sleep_intctl_src[1] = au_readl(IC1_SRCRD);
-	sleep_intctl_assign[1] = au_readl(IC1_ASSIGNRD);
-	sleep_intctl_wake[1] = au_readl(IC1_WAKERD);
-	sleep_intctl_mask[1] = au_readl(IC1_MASKRD);
-}
-
-/*
- * For most restore operations, we clear the entire register and
- * then set the bits we found during the save.
- */
-void restore_au1xxx_intctl(void)
-{
-	au_writel(0xffffffff, IC0_MASKCLR); au_sync();
-
-	au_writel(0xffffffff, IC0_CFG0CLR); au_sync();
-	au_writel(sleep_intctl_config0[0], IC0_CFG0SET); au_sync();
-	au_writel(0xffffffff, IC0_CFG1CLR); au_sync();
-	au_writel(sleep_intctl_config1[0], IC0_CFG1SET); au_sync();
-	au_writel(0xffffffff, IC0_CFG2CLR); au_sync();
-	au_writel(sleep_intctl_config2[0], IC0_CFG2SET); au_sync();
-	au_writel(0xffffffff, IC0_SRCCLR); au_sync();
-	au_writel(sleep_intctl_src[0], IC0_SRCSET); au_sync();
-	au_writel(0xffffffff, IC0_ASSIGNCLR); au_sync();
-	au_writel(sleep_intctl_assign[0], IC0_ASSIGNSET); au_sync();
-	au_writel(0xffffffff, IC0_WAKECLR); au_sync();
-	au_writel(sleep_intctl_wake[0], IC0_WAKESET); au_sync();
-	au_writel(0xffffffff, IC0_RISINGCLR); au_sync();
-	au_writel(0xffffffff, IC0_FALLINGCLR); au_sync();
-	au_writel(0x00000000, IC0_TESTBIT); au_sync();
-
-	au_writel(0xffffffff, IC1_MASKCLR); au_sync();
-
-	au_writel(0xffffffff, IC1_CFG0CLR); au_sync();
-	au_writel(sleep_intctl_config0[1], IC1_CFG0SET); au_sync();
-	au_writel(0xffffffff, IC1_CFG1CLR); au_sync();
-	au_writel(sleep_intctl_config1[1], IC1_CFG1SET); au_sync();
-	au_writel(0xffffffff, IC1_CFG2CLR); au_sync();
-	au_writel(sleep_intctl_config2[1], IC1_CFG2SET); au_sync();
-	au_writel(0xffffffff, IC1_SRCCLR); au_sync();
-	au_writel(sleep_intctl_src[1], IC1_SRCSET); au_sync();
-	au_writel(0xffffffff, IC1_ASSIGNCLR); au_sync();
-	au_writel(sleep_intctl_assign[1], IC1_ASSIGNSET); au_sync();
-	au_writel(0xffffffff, IC1_WAKECLR); au_sync();
-	au_writel(sleep_intctl_wake[1], IC1_WAKESET); au_sync();
-	au_writel(0xffffffff, IC1_RISINGCLR); au_sync();
-	au_writel(0xffffffff, IC1_FALLINGCLR); au_sync();
-	au_writel(0x00000000, IC1_TESTBIT); au_sync();
-
-	au_writel(sleep_intctl_mask[1], IC1_MASKSET); au_sync();
-
-	au_writel(sleep_intctl_mask[0], IC0_MASKSET); au_sync();
-}
-#endif /* CONFIG_PM */
-
-
-static void au1x_ic0_unmask(unsigned int irq_nr)
-{
-	unsigned int bit = irq_nr - AU1000_INTC0_INT_BASE;
+	unsigned int bit = d->irq - AU1000_INTC0_INT_BASE;
 	au_writel(1 << bit, IC0_MASKSET);
 	au_writel(1 << bit, IC0_WAKESET);
 	au_sync();
 }
 
-static void au1x_ic1_unmask(unsigned int irq_nr)
+static void au1x_ic1_unmask(struct irq_data *d)
 {
-	unsigned int bit = irq_nr - AU1000_INTC1_INT_BASE;
+	unsigned int bit = d->irq - AU1000_INTC1_INT_BASE;
 	au_writel(1 << bit, IC1_MASKSET);
 	au_writel(1 << bit, IC1_WAKESET);
 
@@ -318,31 +236,31 @@ static void au1x_ic1_unmask(unsigned int irq_nr)
  * nowhere in the current kernel sources is it disabled.	--mlau
  */
 #if defined(CONFIG_MIPS_PB1000)
-	if (irq_nr == AU1000_GPIO15_INT)
+	if (d->irq == AU1000_GPIO15_INT)
 		au_writel(0x4000, PB1000_MDR); /* enable int */
 #endif
 	au_sync();
 }
 
-static void au1x_ic0_mask(unsigned int irq_nr)
+static void au1x_ic0_mask(struct irq_data *d)
 {
-	unsigned int bit = irq_nr - AU1000_INTC0_INT_BASE;
+	unsigned int bit = d->irq - AU1000_INTC0_INT_BASE;
 	au_writel(1 << bit, IC0_MASKCLR);
 	au_writel(1 << bit, IC0_WAKECLR);
 	au_sync();
 }
 
-static void au1x_ic1_mask(unsigned int irq_nr)
+static void au1x_ic1_mask(struct irq_data *d)
 {
-	unsigned int bit = irq_nr - AU1000_INTC1_INT_BASE;
+	unsigned int bit = d->irq - AU1000_INTC1_INT_BASE;
 	au_writel(1 << bit, IC1_MASKCLR);
 	au_writel(1 << bit, IC1_WAKECLR);
 	au_sync();
 }
 
-static void au1x_ic0_ack(unsigned int irq_nr)
+static void au1x_ic0_ack(struct irq_data *d)
 {
-	unsigned int bit = irq_nr - AU1000_INTC0_INT_BASE;
+	unsigned int bit = d->irq - AU1000_INTC0_INT_BASE;
 
 	/*
 	 * This may assume that we don't get interrupts from
@@ -353,9 +271,9 @@ static void au1x_ic0_ack(unsigned int irq_nr)
 	au_sync();
 }
 
-static void au1x_ic1_ack(unsigned int irq_nr)
+static void au1x_ic1_ack(struct irq_data *d)
 {
-	unsigned int bit = irq_nr - AU1000_INTC1_INT_BASE;
+	unsigned int bit = d->irq - AU1000_INTC1_INT_BASE;
 
 	/*
 	 * This may assume that we don't get interrupts from
@@ -366,9 +284,9 @@ static void au1x_ic1_ack(unsigned int irq_nr)
 	au_sync();
 }
 
-static void au1x_ic0_maskack(unsigned int irq_nr)
+static void au1x_ic0_maskack(struct irq_data *d)
 {
-	unsigned int bit = irq_nr - AU1000_INTC0_INT_BASE;
+	unsigned int bit = d->irq - AU1000_INTC0_INT_BASE;
 
 	au_writel(1 << bit, IC0_WAKECLR);
 	au_writel(1 << bit, IC0_MASKCLR);
@@ -377,9 +295,9 @@ static void au1x_ic0_maskack(unsigned int irq_nr)
 	au_sync();
 }
 
-static void au1x_ic1_maskack(unsigned int irq_nr)
+static void au1x_ic1_maskack(struct irq_data *d)
 {
-	unsigned int bit = irq_nr - AU1000_INTC1_INT_BASE;
+	unsigned int bit = d->irq - AU1000_INTC1_INT_BASE;
 
 	au_writel(1 << bit, IC1_WAKECLR);
 	au_writel(1 << bit, IC1_MASKCLR);
@@ -388,9 +306,9 @@ static void au1x_ic1_maskack(unsigned int irq_nr)
 	au_sync();
 }
 
-static int au1x_ic1_setwake(unsigned int irq, unsigned int on)
+static int au1x_ic1_setwake(struct irq_data *d, unsigned int on)
 {
-	int bit = irq - AU1000_INTC1_INT_BASE;
+	int bit = d->irq - AU1000_INTC1_INT_BASE;
 	unsigned long wakemsk, flags;
 
 	/* only GPIO 0-7 can act as wakeup source.  Fortunately these
@@ -418,28 +336,30 @@ static int au1x_ic1_setwake(unsigned int irq, unsigned int on)
  */
 static struct irq_chip au1x_ic0_chip = {
 	.name		= "Alchemy-IC0",
-	.ack		= au1x_ic0_ack,
-	.mask		= au1x_ic0_mask,
-	.mask_ack	= au1x_ic0_maskack,
-	.unmask		= au1x_ic0_unmask,
-	.set_type	= au1x_ic_settype,
+	.irq_ack	= au1x_ic0_ack,
+	.irq_mask	= au1x_ic0_mask,
+	.irq_mask_ack	= au1x_ic0_maskack,
+	.irq_unmask	= au1x_ic0_unmask,
+	.irq_set_type	= au1x_ic_settype,
 };
 
 static struct irq_chip au1x_ic1_chip = {
 	.name		= "Alchemy-IC1",
-	.ack		= au1x_ic1_ack,
-	.mask		= au1x_ic1_mask,
-	.mask_ack	= au1x_ic1_maskack,
-	.unmask		= au1x_ic1_unmask,
-	.set_type	= au1x_ic_settype,
-	.set_wake	= au1x_ic1_setwake,
+	.irq_ack	= au1x_ic1_ack,
+	.irq_mask	= au1x_ic1_mask,
+	.irq_mask_ack	= au1x_ic1_maskack,
+	.irq_unmask	= au1x_ic1_unmask,
+	.irq_set_type	= au1x_ic_settype,
+	.irq_set_wake	= au1x_ic1_setwake,
 };
 
-static int au1x_ic_settype(unsigned int irq, unsigned int flow_type)
+static int au1x_ic_settype(struct irq_data *d, unsigned int flow_type)
 {
 	struct irq_chip *chip;
 	unsigned long icr[6];
-	unsigned int bit, ic;
+	unsigned int bit, ic, irq = d->irq;
+	irq_flow_handler_t handler = NULL;
+	unsigned char *name = NULL;
 	int ret;
 
 	if (irq >= AU1000_INTC1_INT_BASE) {
@@ -469,47 +389,47 @@ static int au1x_ic_settype(unsigned int irq, unsigned int flow_type)
 		au_writel(1 << bit, icr[5]);
 		au_writel(1 << bit, icr[4]);
 		au_writel(1 << bit, icr[0]);
-		set_irq_chip_and_handler_name(irq, chip,
-				handle_edge_irq, "riseedge");
+		handler = handle_edge_irq;
+		name = "riseedge";
 		break;
 	case IRQ_TYPE_EDGE_FALLING:	/* 0:1:0 */
 		au_writel(1 << bit, icr[5]);
 		au_writel(1 << bit, icr[1]);
 		au_writel(1 << bit, icr[3]);
-		set_irq_chip_and_handler_name(irq, chip,
-				handle_edge_irq, "falledge");
+		handler = handle_edge_irq;
+		name = "falledge";
 		break;
 	case IRQ_TYPE_EDGE_BOTH:	/* 0:1:1 */
 		au_writel(1 << bit, icr[5]);
 		au_writel(1 << bit, icr[1]);
 		au_writel(1 << bit, icr[0]);
-		set_irq_chip_and_handler_name(irq, chip,
-				handle_edge_irq, "bothedge");
+		handler = handle_edge_irq;
+		name = "bothedge";
 		break;
 	case IRQ_TYPE_LEVEL_HIGH:	/* 1:0:1 */
 		au_writel(1 << bit, icr[2]);
 		au_writel(1 << bit, icr[4]);
 		au_writel(1 << bit, icr[0]);
-		set_irq_chip_and_handler_name(irq, chip,
-				handle_level_irq, "hilevel");
+		handler = handle_level_irq;
+		name = "hilevel";
 		break;
 	case IRQ_TYPE_LEVEL_LOW:	/* 1:1:0 */
 		au_writel(1 << bit, icr[2]);
 		au_writel(1 << bit, icr[1]);
 		au_writel(1 << bit, icr[3]);
-		set_irq_chip_and_handler_name(irq, chip,
-				handle_level_irq, "lowlevel");
+		handler = handle_level_irq;
+		name = "lowlevel";
 		break;
 	case IRQ_TYPE_NONE:		/* 0:0:0 */
 		au_writel(1 << bit, icr[5]);
 		au_writel(1 << bit, icr[4]);
 		au_writel(1 << bit, icr[3]);
-		/* set at least chip so we can call set_irq_type() on it */
-		set_irq_chip(irq, chip);
 		break;
 	default:
 		ret = -EINVAL;
 	}
+	__irq_set_chip_handler_name_locked(d->irq, chip, handler, name);
+
 	au_sync();
 
 	return ret;
@@ -586,11 +506,11 @@ static void __init au1000_init_irq(struct au1xxx_irqmap *map)
 	 */
 	for (i = AU1000_INTC0_INT_BASE;
 	     (i < AU1000_INTC0_INT_BASE + 32); i++)
-		au1x_ic_settype(i, IRQ_TYPE_NONE);
+		au1x_ic_settype(irq_get_irq_data(i), IRQ_TYPE_NONE);
 
 	for (i = AU1000_INTC1_INT_BASE;
 	     (i < AU1000_INTC1_INT_BASE + 32); i++)
-		au1x_ic_settype(i, IRQ_TYPE_NONE);
+		au1x_ic_settype(irq_get_irq_data(i), IRQ_TYPE_NONE);
 
 	/*
 	 * Initialize IC0, which is fixed per processor.
@@ -608,7 +528,7 @@ static void __init au1000_init_irq(struct au1xxx_irqmap *map)
 				au_writel(1 << bit, IC0_ASSIGNSET);
 		}
 
-		au1x_ic_settype(irq_nr, map->im_type);
+		au1x_ic_settype(irq_get_irq_data(irq_nr), map->im_type);
 		++map;
 	}
 
@@ -635,3 +555,91 @@ void __init arch_init_irq(void)
 		break;
 	}
 }
+
+struct alchemy_ic_sysdev {
+	struct sys_device sysdev;
+	void __iomem *base;
+	unsigned long pmdata[7];
+};
+
+static int alchemy_ic_suspend(struct sys_device *dev, pm_message_t state)
+{
+	struct alchemy_ic_sysdev *icdev =
+			container_of(dev, struct alchemy_ic_sysdev, sysdev);
+
+	icdev->pmdata[0] = __raw_readl(icdev->base + IC_CFG0RD);
+	icdev->pmdata[1] = __raw_readl(icdev->base + IC_CFG1RD);
+	icdev->pmdata[2] = __raw_readl(icdev->base + IC_CFG2RD);
+	icdev->pmdata[3] = __raw_readl(icdev->base + IC_SRCRD);
+	icdev->pmdata[4] = __raw_readl(icdev->base + IC_ASSIGNRD);
+	icdev->pmdata[5] = __raw_readl(icdev->base + IC_WAKERD);
+	icdev->pmdata[6] = __raw_readl(icdev->base + IC_MASKRD);
+
+	return 0;
+}
+
+static int alchemy_ic_resume(struct sys_device *dev)
+{
+	struct alchemy_ic_sysdev *icdev =
+			container_of(dev, struct alchemy_ic_sysdev, sysdev);
+
+	__raw_writel(0xffffffff, icdev->base + IC_MASKCLR);
+	__raw_writel(0xffffffff, icdev->base + IC_CFG0CLR);
+	__raw_writel(0xffffffff, icdev->base + IC_CFG1CLR);
+	__raw_writel(0xffffffff, icdev->base + IC_CFG2CLR);
+	__raw_writel(0xffffffff, icdev->base + IC_SRCCLR);
+	__raw_writel(0xffffffff, icdev->base + IC_ASSIGNCLR);
+	__raw_writel(0xffffffff, icdev->base + IC_WAKECLR);
+	__raw_writel(0xffffffff, icdev->base + IC_RISINGCLR);
+	__raw_writel(0xffffffff, icdev->base + IC_FALLINGCLR);
+	__raw_writel(0x00000000, icdev->base + IC_TESTBIT);
+	wmb();
+	__raw_writel(icdev->pmdata[0], icdev->base + IC_CFG0SET);
+	__raw_writel(icdev->pmdata[1], icdev->base + IC_CFG1SET);
+	__raw_writel(icdev->pmdata[2], icdev->base + IC_CFG2SET);
+	__raw_writel(icdev->pmdata[3], icdev->base + IC_SRCSET);
+	__raw_writel(icdev->pmdata[4], icdev->base + IC_ASSIGNSET);
+	__raw_writel(icdev->pmdata[5], icdev->base + IC_WAKESET);
+	wmb();
+
+	__raw_writel(icdev->pmdata[6], icdev->base + IC_MASKSET);
+	wmb();
+
+	return 0;
+}
+
+static struct sysdev_class alchemy_ic_sysdev_class = {
+	.name		= "ic",
+	.suspend	= alchemy_ic_suspend,
+	.resume		= alchemy_ic_resume,
+};
+
+static int __init alchemy_ic_sysdev_init(void)
+{
+	struct alchemy_ic_sysdev *icdev;
+	unsigned long icbase[2] = { IC0_PHYS_ADDR, IC1_PHYS_ADDR };
+	int err, i;
+
+	err = sysdev_class_register(&alchemy_ic_sysdev_class);
+	if (err)
+		return err;
+
+	for (i = 0; i < 2; i++) {
+		icdev = kzalloc(sizeof(struct alchemy_ic_sysdev), GFP_KERNEL);
+		if (!icdev)
+			return -ENOMEM;
+
+		icdev->base = ioremap(icbase[i], 0x1000);
+
+		icdev->sysdev.id = i;
+		icdev->sysdev.cls = &alchemy_ic_sysdev_class;
+		err = sysdev_register(&icdev->sysdev);
+		if (err) {
+			kfree(icdev);
+			return err;
+		}
+	}
+
+	return 0;
+}
+device_initcall(alchemy_ic_sysdev_init);

@@ -34,7 +34,7 @@
 /* Use ENTRY_SAME for 32-bit syscalls which are the same on wide and
  * narrow palinux.  Use ENTRY_DIFF for those where a 32-bit specific
  * implementation is required on wide palinux.  Use ENTRY_COMP where
- * the compatability layer has a useful 32-bit implementation.
+ * the compatibility layer has a useful 32-bit implementation.
  */
 #define ENTRY_SAME(_name_) .dword sys_##_name_
 #define ENTRY_DIFF(_name_) .dword sys32_##_name_
@@ -419,6 +419,7 @@
 	ENTRY_SAME(perf_event_open)
 	ENTRY_COMP(recvmmsg)
 	ENTRY_SAME(accept4)		/* 320 */
+	ENTRY_SAME(prlimit64)
 
 	/* Nothing yet */
 

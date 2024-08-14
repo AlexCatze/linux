@@ -6,7 +6,7 @@
  *	D-77833 Ottersweier
  *	Tel: +19(0)7223/9493-0
  *	Fax: +49(0)7223/9493-92
- *	http://www.addi-data-com
+ *	http://www.addi-data.com
  *	info@addi-data.com
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -351,7 +351,7 @@ struct addi_private {
 	int i_IobaseAmcc;	/*  base+size for AMCC chip */
 	int i_IobaseAddon;	/* addon base address */
 	int i_IobaseReserved;
-	unsigned long dw_AiBase;
+	void __iomem *dw_AiBase;
 	struct pcilst_struct *amcc;	/*  ptr too AMCC data */
 	unsigned char allocated;		/*  we have blocked card */
 	unsigned char b_ValidDriver;	/*  driver is ok */

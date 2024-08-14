@@ -31,15 +31,14 @@
 
 enum cipher rt2x00crypto_key_to_cipher(struct ieee80211_key_conf *key)
 {
-	switch (key->alg) {
-	case ALG_WEP:
-		if (key->keylen == WLAN_KEY_LEN_WEP40)
-			return CIPHER_WEP64;
-		else
-			return CIPHER_WEP128;
-	case ALG_TKIP:
+	switch (key->cipher) {
+	case WLAN_CIPHER_SUITE_WEP40:
+		return CIPHER_WEP64;
+	case WLAN_CIPHER_SUITE_WEP104:
+		return CIPHER_WEP128;
+	case WLAN_CIPHER_SUITE_TKIP:
 		return CIPHER_TKIP;
-	case ALG_CCMP:
+	case WLAN_CIPHER_SUITE_CCMP:
 		return CIPHER_AES;
 	default:
 		return CIPHER_NONE;
@@ -95,7 +94,7 @@ unsigned int rt2x00crypto_tx_overhead(struct rt2x00_dev *rt2x00dev,
 		overhead += key->iv_len;
 
 	if (!(key->flags & IEEE80211_KEY_FLAG_GENERATE_MMIC)) {
-		if (key->alg == ALG_TKIP)
+		if (key->cipher == WLAN_CIPHER_SUITE_TKIP)
 			overhead += 8;
 	}
 
@@ -128,6 +127,7 @@ void rt2x00crypto_tx_remove_iv(struct sk_buff *skb, struct txentry_desc *txdesc)
 
 	/* Pull buffer to correct size */
 	skb_pull(skb, txdesc->iv_len);
+	txdesc->length -= txdesc->iv_len;
 
 	/* IV/EIV data has officially been stripped */
 	skbdesc->flags |= SKBDESC_IV_STRIPPED;
@@ -237,7 +237,7 @@ void rt2x00crypto_rx_insert_iv(struct sk_buff *skb,
 	}
 
 	/*
-	 * NOTE: Always count the payload as transfered,
+	 * NOTE: Always count the payload as transferred,
 	 * even when alignment was set to zero. This is required
 	 * for determining the correct offset for the ICV data.
 	 */

@@ -27,8 +27,6 @@
 
 #define MAX_LINKS 32		
 
-struct net;
-
 struct sockaddr_nl {
 	sa_family_t	nl_family;	/* AF_NETLINK	*/
 	unsigned short	nl_pad;		/* zero		*/
@@ -72,7 +70,7 @@ struct nlmsghdr {
    Check		NLM_F_EXCL
  */
 
-#define NLMSG_ALIGNTO	4
+#define NLMSG_ALIGNTO	4U
 #define NLMSG_ALIGN(len) ( ((len)+NLMSG_ALIGNTO-1) & ~(NLMSG_ALIGNTO-1) )
 #define NLMSG_HDRLEN	 ((int) NLMSG_ALIGN(sizeof(struct nlmsghdr)))
 #define NLMSG_LENGTH(len) ((len)+NLMSG_ALIGN(NLMSG_HDRLEN))
@@ -151,6 +149,8 @@ struct nlattr {
 #include <linux/capability.h>
 #include <linux/skbuff.h>
 
+struct net;
+
 static inline struct nlmsghdr *nlmsg_hdr(const struct sk_buff *skb)
 {
 	return (struct nlmsghdr *)skb->data;
@@ -160,10 +160,6 @@ struct netlink_skb_parms {
 	struct ucred		creds;		/* Skb credentials	*/
 	__u32			pid;
 	__u32			dst_group;
-	kernel_cap_t		eff_cap;
-	__u32			loginuid;	/* Login (audit) uid */
-	__u32			sessionid;	/* Session id (audit) */
-	__u32			sid;		/* SELinux security id */
 };
 
 #define NETLINK_CB(skb)		(*(struct netlink_skb_parms*)&((skb)->cb))
@@ -188,6 +184,10 @@ extern int netlink_has_listeners(struct sock *sk, unsigned int group);
 extern int netlink_unicast(struct sock *ssk, struct sk_buff *skb, __u32 pid, int nonblock);
 extern int netlink_broadcast(struct sock *ssk, struct sk_buff *skb, __u32 pid,
 			     __u32 group, gfp_t allocation);
+extern int netlink_broadcast_filtered(struct sock *ssk, struct sk_buff *skb,
+	__u32 pid, __u32 group, gfp_t allocation,
+	int (*filter)(struct sock *dsk, struct sk_buff *skb, void *data),
+	void *filter_data);
 extern int netlink_set_err(struct sock *ssk, __u32 pid, __u32 group, int code);
 extern int netlink_register_notifier(struct notifier_block *nb);
 extern int netlink_unregister_notifier(struct notifier_block *nb);

@@ -38,6 +38,19 @@ EXPORT_SYMBOL(pci_pci_problems);
 
 unsigned int pci_pm_d3_delay;
 
+static void pci_pme_list_scan(struct work_struct *work);
+
+static LIST_HEAD(pci_pme_list);
+static DEFINE_MUTEX(pci_pme_list_mutex);
+static DECLARE_DELAYED_WORK(pci_pme_work, pci_pme_list_scan);
+
+struct pci_pme_device {
+	struct list_head list;
+	struct pci_dev *dev;
+};
+
+#define PME_TIMEOUT 1000 /* How long between PME checks */
+
 static void pci_dev_d3_sleep(struct pci_dev *dev)
 {
 	unsigned int delay = dev->d3_delay;
@@ -727,6 +740,12 @@ int pci_set_power_state(struct pci_dev *dev, pci_power_t state)
 
 	if (!__pci_complete_power_transition(dev, state))
 		error = 0;
+	/*
+	 * When aspm_policy is "powersave" this call ensures
+	 * that ASPM is configured.
+	 */
+	if (!error && dev->bus->self)
+		pcie_aspm_powersave_config_link(dev->bus->self);
 
 	return error;
 }
@@ -924,14 +943,13 @@ pci_save_state(struct pci_dev *dev)
  * pci_restore_state - Restore the saved state of a PCI device
  * @dev: - PCI device that we're dealing with
  */
-int 
-pci_restore_state(struct pci_dev *dev)
+void pci_restore_state(struct pci_dev *dev)
 {
 	int i;
 	u32 val;
 
 	if (!dev->state_saved)
-		return 0;
+		return;
 
 	/* PCI Express register must be restored first */
 	pci_restore_pcie_state(dev);
@@ -955,8 +973,6 @@ pci_restore_state(struct pci_dev *dev)
 	pci_restore_iov_state(dev);
 
 	dev->state_saved = false;
-
-	return 0;
 }
 
 static int do_pci_enable_device(struct pci_dev *dev, int bars)
@@ -993,6 +1009,18 @@ static int __pci_enable_device_flags(struct pci_dev *dev,
 {
 	int err;
 	int i, bars = 0;
+
+	/*
+	 * Power state could be unknown at this point, either due to a fresh
+	 * boot or a device removal call.  So get the current power state
+	 * so that things like MSI message writing will behave as expected
+	 * (e.g. if the device really is in D0 at enable time).
+	 */
+	if (dev->pm_cap) {
+		u16 pmcsr;
+		pci_read_config_word(dev, dev->pm_cap + PCI_PM_CTRL, &pmcsr);
+		dev->current_state = (pmcsr & PCI_PM_CTRL_STATE_MASK);
+	}
 
 	if (atomic_add_return(1, &dev->enable_cnt) > 1)
 		return 0;		/* already enabled */
@@ -1193,7 +1221,7 @@ void pci_disable_enabled_device(struct pci_dev *dev)
  * anymore.  This only involves disabling PCI bus-mastering, if active.
  *
  * Note we don't actually disable the device until all callers of
- * pci_device_enable() have called pci_device_disable().
+ * pci_enable_device() have called pci_disable_device().
  */
 void
 pci_disable_device(struct pci_dev *dev)
@@ -1285,8 +1313,10 @@ bool pci_check_pme_status(struct pci_dev *dev)
  */
 static int pci_pme_wakeup(struct pci_dev *dev, void *ign)
 {
-	if (pci_check_pme_status(dev))
+	if (pci_check_pme_status(dev)) {
+		pci_wakeup_event(dev);
 		pm_request_resume(&dev->dev);
+	}
 	return 0;
 }
 
@@ -1313,6 +1343,32 @@ bool pci_pme_capable(struct pci_dev *dev, pci_power_t state)
 	return !!(dev->pme_support & (1 << state));
 }
 
+static void pci_pme_list_scan(struct work_struct *work)
+{
+	struct pci_pme_device *pme_dev;
+
+	mutex_lock(&pci_pme_list_mutex);
+	if (!list_empty(&pci_pme_list)) {
+		list_for_each_entry(pme_dev, &pci_pme_list, list)
+			pci_pme_wakeup(pme_dev->dev, NULL);
+		schedule_delayed_work(&pci_pme_work, msecs_to_jiffies(PME_TIMEOUT));
+	}
+	mutex_unlock(&pci_pme_list_mutex);
+}
+
+/**
+ * pci_external_pme - is a device an external PCI PME source?
+ * @dev: PCI device to check
+ *
+ */
+
+static bool pci_external_pme(struct pci_dev *dev)
+{
+	if (pci_is_pcie(dev) || dev->bus->number == 0)
+		return false;
+	return true;
+}
+
 /**
  * pci_pme_active - enable or disable PCI device's PME# function
  * @dev: PCI device to handle.
@@ -1336,6 +1392,44 @@ void pci_pme_active(struct pci_dev *dev, bool enable)
 
 	pci_write_config_word(dev, dev->pm_cap + PCI_PM_CTRL, pmcsr);
 
+	/* PCI (as opposed to PCIe) PME requires that the device have
+	   its PME# line hooked up correctly. Not all hardware vendors
+	   do this, so the PME never gets delivered and the device
+	   remains asleep. The easiest way around this is to
+	   periodically walk the list of suspended devices and check
+	   whether any have their PME flag set. The assumption is that
+	   we'll wake up often enough anyway that this won't be a huge
+	   hit, and the power savings from the devices will still be a
+	   win. */
+
+	if (pci_external_pme(dev)) {
+		struct pci_pme_device *pme_dev;
+		if (enable) {
+			pme_dev = kmalloc(sizeof(struct pci_pme_device),
+					  GFP_KERNEL);
+			if (!pme_dev)
+				goto out;
+			pme_dev->dev = dev;
+			mutex_lock(&pci_pme_list_mutex);
+			list_add(&pme_dev->list, &pci_pme_list);
+			if (list_is_singular(&pci_pme_list))
+				schedule_delayed_work(&pci_pme_work,
+						      msecs_to_jiffies(PME_TIMEOUT));
+			mutex_unlock(&pci_pme_list_mutex);
+		} else {
+			mutex_lock(&pci_pme_list_mutex);
+			list_for_each_entry(pme_dev, &pci_pme_list, list) {
+				if (pme_dev->dev == dev) {
+					list_del(&pme_dev->list);
+					kfree(pme_dev);
+					break;
+				}
+			}
+			mutex_unlock(&pci_pme_list_mutex);
+		}
+	}
+
+out:
 	dev_printk(KERN_DEBUG, &dev->dev, "PME# %s\n",
 			enable ? "enabled" : "disabled");
 }
@@ -1503,7 +1597,7 @@ int pci_prepare_to_sleep(struct pci_dev *dev)
  * pci_back_from_sleep - turn PCI device on during system-wide transition into working state
  * @dev: Device to handle.
  *
- * Disable device's sytem wake-up capability and put it into D0.
+ * Disable device's system wake-up capability and put it into D0.
  */
 int pci_back_from_sleep(struct pci_dev *dev)
 {
@@ -1631,7 +1725,6 @@ void pci_pm_init(struct pci_dev *dev)
 		 * let the user space enable it to wake up the system as needed.
 		 */
 		device_set_wakeup_capable(&dev->dev, true);
-		device_set_wakeup_enable(&dev->dev, false);
 		/* Disable the PME# generation functionality */
 		pci_pme_active(dev, false);
 	} else {
@@ -1655,7 +1748,6 @@ void platform_pci_wakeup_init(struct pci_dev *dev)
 		return;
 
 	device_set_wakeup_capable(&dev->dev, true);
-	device_set_wakeup_enable(&dev->dev, false);
 	platform_pci_sleep_wake(dev, false);
 }
 
@@ -2294,22 +2386,19 @@ void pci_msi_off(struct pci_dev *dev)
 		pci_write_config_word(dev, pos + PCI_MSIX_FLAGS, control);
 	}
 }
+EXPORT_SYMBOL_GPL(pci_msi_off);
 
-#ifndef HAVE_ARCH_PCI_SET_DMA_MAX_SEGMENT_SIZE
 int pci_set_dma_max_seg_size(struct pci_dev *dev, unsigned int size)
 {
 	return dma_set_max_seg_size(&dev->dev, size);
 }
 EXPORT_SYMBOL(pci_set_dma_max_seg_size);
-#endif
 
-#ifndef HAVE_ARCH_PCI_SET_DMA_SEGMENT_BOUNDARY
 int pci_set_dma_seg_boundary(struct pci_dev *dev, unsigned long mask)
 {
 	return dma_set_seg_boundary(&dev->dev, mask);
 }
 EXPORT_SYMBOL(pci_set_dma_seg_boundary);
-#endif
 
 static int pcie_flr(struct pci_dev *dev, int probe)
 {
@@ -2676,7 +2765,7 @@ int pcie_get_readrq(struct pci_dev *dev)
 
 	ret = pci_read_config_word(dev, cap + PCI_EXP_DEVCTL, &ctl);
 	if (!ret)
-	ret = 128 << ((ctl & PCI_EXP_DEVCTL_READRQ) >> 12);
+		ret = 128 << ((ctl & PCI_EXP_DEVCTL_READRQ) >> 12);
 
 	return ret;
 }

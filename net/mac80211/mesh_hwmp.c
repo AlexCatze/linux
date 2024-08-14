@@ -132,7 +132,7 @@ static int mesh_path_sel_frame_tx(enum mpath_frame_type action, u8 flags,
 	memcpy(mgmt->sa, sdata->vif.addr, ETH_ALEN);
 	/* BSSID == SA */
 	memcpy(mgmt->bssid, sdata->vif.addr, ETH_ALEN);
-	mgmt->u.action.category = MESH_PATH_SEL_CATEGORY;
+	mgmt->u.action.category = WLAN_CATEGORY_MESH_PATH_SEL;
 	mgmt->u.action.u.mesh_action.action_code = MESH_PATH_SEL_ACTION;
 
 	switch (action) {
@@ -225,14 +225,14 @@ int mesh_path_error_tx(u8 ttl, u8 *target, __le32 target_sn,
 	memcpy(mgmt->da, ra, ETH_ALEN);
 	memcpy(mgmt->sa, sdata->vif.addr, ETH_ALEN);
 	/* BSSID is left zeroed, wildcard value */
-	mgmt->u.action.category = MESH_PATH_SEL_CATEGORY;
+	mgmt->u.action.category = WLAN_CATEGORY_MESH_PATH_SEL;
 	mgmt->u.action.u.mesh_action.action_code = MESH_PATH_SEL_ACTION;
 	ie_len = 15;
 	pos = skb_put(skb, 2 + ie_len);
 	*pos++ = WLAN_EID_PERR;
 	*pos++ = ie_len;
 	/* ttl */
-	*pos++ = MESH_TTL;
+	*pos++ = ttl;
 	/* number of destinations */
 	*pos++ = 1;
 	/*
@@ -522,7 +522,7 @@ static void hwmp_preq_frame_process(struct ieee80211_sub_if_data *sdata,
 
 	if (reply) {
 		lifetime = PREQ_IE_LIFETIME(preq_elem);
-		ttl = ifmsh->mshcfg.dot11MeshTTL;
+		ttl = ifmsh->mshcfg.element_ttl;
 		if (ttl != 0) {
 			mhwmp_dbg("replying to the PREQ\n");
 			mesh_path_sel_frame_tx(MPATH_PREP, 0, target_addr,
@@ -624,7 +624,6 @@ static void hwmp_prep_frame_process(struct ieee80211_sub_if_data *sdata,
 fail:
 	rcu_read_unlock();
 	sdata->u.mesh.mshstats.dropped_frames_no_route++;
-	return;
 }
 
 static void hwmp_perr_frame_process(struct ieee80211_sub_if_data *sdata,
@@ -806,14 +805,14 @@ static void mesh_queue_preq(struct mesh_path *mpath, u8 flags)
 	spin_unlock(&ifmsh->mesh_preq_queue_lock);
 
 	if (time_after(jiffies, ifmsh->last_preq + min_preq_int_jiff(sdata)))
-		ieee80211_queue_work(&sdata->local->hw, &ifmsh->work);
+		ieee80211_queue_work(&sdata->local->hw, &sdata->work);
 
 	else if (time_before(jiffies, ifmsh->last_preq)) {
 		/* avoid long wait if did not send preqs for a long time
 		 * and jiffies wrapped around
 		 */
 		ifmsh->last_preq = jiffies - min_preq_int_jiff(sdata) - 1;
-		ieee80211_queue_work(&sdata->local->hw, &ifmsh->work);
+		ieee80211_queue_work(&sdata->local->hw, &sdata->work);
 	} else
 		mod_timer(&ifmsh->mesh_path_timer, ifmsh->last_preq +
 						min_preq_int_jiff(sdata));
@@ -878,7 +877,7 @@ void mesh_path_start_discovery(struct ieee80211_sub_if_data *sdata)
 		sdata->u.mesh.last_sn_update = jiffies;
 	}
 	lifetime = default_lifetime(sdata);
-	ttl = sdata->u.mesh.mshcfg.dot11MeshTTL;
+	ttl = sdata->u.mesh.mshcfg.element_ttl;
 	if (ttl == 0) {
 		sdata->u.mesh.mshstats.dropped_frames_ttl++;
 		spin_unlock_bh(&mpath->state_lock);
@@ -1014,5 +1013,6 @@ mesh_path_tx_root_frame(struct ieee80211_sub_if_data *sdata)
 	mesh_path_sel_frame_tx(MPATH_RANN, 0, sdata->vif.addr,
 			       cpu_to_le32(++ifmsh->sn),
 			       0, NULL, 0, broadcast_addr,
-			       0, MESH_TTL, 0, 0, 0, sdata);
+			       0, sdata->u.mesh.mshcfg.element_ttl,
+			       0, 0, 0, sdata);
 }

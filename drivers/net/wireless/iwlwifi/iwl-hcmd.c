@@ -49,6 +49,7 @@ const char *get_cmd_string(u8 cmd)
 		IWL_CMD(REPLY_ADD_STA);
 		IWL_CMD(REPLY_REMOVE_STA);
 		IWL_CMD(REPLY_REMOVE_ALL_STA);
+		IWL_CMD(REPLY_TXFIFO_FLUSH);
 		IWL_CMD(REPLY_WEPKEY);
 		IWL_CMD(REPLY_3945_RX);
 		IWL_CMD(REPLY_TX);
@@ -96,12 +97,23 @@ const char *get_cmd_string(u8 cmd)
 		IWL_CMD(REPLY_TX_POWER_DBM_CMD);
 		IWL_CMD(TEMPERATURE_NOTIFICATION);
 		IWL_CMD(TX_ANT_CONFIGURATION_CMD);
+		IWL_CMD(REPLY_BT_COEX_PROFILE_NOTIF);
+		IWL_CMD(REPLY_BT_COEX_PRIO_TABLE);
+		IWL_CMD(REPLY_BT_COEX_PROT_ENV);
+		IWL_CMD(REPLY_WIPAN_PARAMS);
+		IWL_CMD(REPLY_WIPAN_RXON);
+		IWL_CMD(REPLY_WIPAN_RXON_TIMING);
+		IWL_CMD(REPLY_WIPAN_RXON_ASSOC);
+		IWL_CMD(REPLY_WIPAN_QOS_PARAM);
+		IWL_CMD(REPLY_WIPAN_WEPKEY);
+		IWL_CMD(REPLY_WIPAN_P2P_CHANNEL_SWITCH);
+		IWL_CMD(REPLY_WIPAN_NOA_NOTIFICATION);
+		IWL_CMD(REPLY_WIPAN_DEACTIVATION_COMPLETE);
 	default:
 		return "UNKNOWN";
 
 	}
 }
-EXPORT_SYMBOL(get_cmd_string);
 
 #define HOST_COMPLETE_TIMEOUT (HZ / 2)
 
@@ -169,7 +181,7 @@ int iwl_send_cmd_sync(struct iwl_priv *priv, struct iwl_host_cmd *cmd)
 	mutex_lock(&priv->sync_cmd_mutex);
 
 	set_bit(STATUS_HCMD_ACTIVE, &priv->status);
-	IWL_DEBUG_INFO(priv, "Setting HCMD_ACTIVE for command %s \n",
+	IWL_DEBUG_INFO(priv, "Setting HCMD_ACTIVE for command %s\n",
 			get_cmd_string(cmd->id));
 
 	cmd_idx = iwl_enqueue_hcmd(priv, cmd);
@@ -191,7 +203,7 @@ int iwl_send_cmd_sync(struct iwl_priv *priv, struct iwl_host_cmd *cmd)
 				jiffies_to_msecs(HOST_COMPLETE_TIMEOUT));
 
 			clear_bit(STATUS_HCMD_ACTIVE, &priv->status);
-			IWL_DEBUG_INFO(priv, "Clearing HCMD_ACTIVE for command %s \n",
+			IWL_DEBUG_INFO(priv, "Clearing HCMD_ACTIVE for command %s\n",
 				       get_cmd_string(cmd->id));
 			ret = -ETIMEDOUT;
 			goto cancel;
@@ -228,7 +240,7 @@ cancel:
 		 * in later, it will possibly set an invalid
 		 * address (cmd->meta.source).
 		 */
-		priv->txq[IWL_CMD_QUEUE_NUM].meta[cmd_idx].flags &=
+		priv->txq[priv->cmd_queue].meta[cmd_idx].flags &=
 							~CMD_WANT_SKB;
 	}
 fail:
@@ -240,7 +252,6 @@ out:
 	mutex_unlock(&priv->sync_cmd_mutex);
 	return ret;
 }
-EXPORT_SYMBOL(iwl_send_cmd_sync);
 
 int iwl_send_cmd(struct iwl_priv *priv, struct iwl_host_cmd *cmd)
 {
@@ -249,7 +260,6 @@ int iwl_send_cmd(struct iwl_priv *priv, struct iwl_host_cmd *cmd)
 
 	return iwl_send_cmd_sync(priv, cmd);
 }
-EXPORT_SYMBOL(iwl_send_cmd);
 
 int iwl_send_cmd_pdu(struct iwl_priv *priv, u8 id, u16 len, const void *data)
 {
@@ -261,7 +271,6 @@ int iwl_send_cmd_pdu(struct iwl_priv *priv, u8 id, u16 len, const void *data)
 
 	return iwl_send_cmd_sync(priv, &cmd);
 }
-EXPORT_SYMBOL(iwl_send_cmd_pdu);
 
 int iwl_send_cmd_pdu_async(struct iwl_priv *priv,
 			   u8 id, u16 len, const void *data,
@@ -280,4 +289,3 @@ int iwl_send_cmd_pdu_async(struct iwl_priv *priv,
 
 	return iwl_send_cmd_async(priv, &cmd);
 }
-EXPORT_SYMBOL(iwl_send_cmd_pdu_async);

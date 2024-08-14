@@ -170,6 +170,16 @@
 #define SPEFSCR_FRMC 	0x00000003	/* Embedded FP rounding mode control */
 
 /* Special Purpose Registers (SPRNs)*/
+
+#ifdef CONFIG_40x
+#define SPRN_PID	0x3B1	/* Process ID */
+#else
+#define SPRN_PID	0x030	/* Process ID */
+#ifdef CONFIG_BOOKE
+#define SPRN_PID0	SPRN_PID/* Process ID Register 0 */
+#endif
+#endif
+
 #define SPRN_CTR	0x009	/* Count Register */
 #define SPRN_DSCR	0x11
 #define SPRN_CTRLF	0x088
@@ -283,6 +293,7 @@
 #define HID0_NOPTI	(1<<0)		/* No-op dcbt and dcbst instr. */
 
 #define SPRN_HID1	0x3F1		/* Hardware Implementation Register 1 */
+#ifdef CONFIG_6xx
 #define HID1_EMCP	(1<<31)		/* 7450 Machine Check Pin Enable */
 #define HID1_DFS	(1<<22)		/* 7447A Dynamic Frequency Scaling */
 #define HID1_PC0	(1<<16)		/* 7450 PLL_CFG[0] */
@@ -292,11 +303,14 @@
 #define HID1_SYNCBE	(1<<11)		/* 7450 ABE for sync, eieio */
 #define HID1_ABE	(1<<10)		/* 7450 Address Broadcast Enable */
 #define HID1_PS		(1<<16)		/* 750FX PLL selection */
+#endif
 #define SPRN_HID2	0x3F8		/* Hardware Implementation Register 2 */
+#define SPRN_HID2_GEKKO	0x398		/* Gekko HID2 Register */
 #define SPRN_IABR	0x3F2	/* Instruction Address Breakpoint Register */
 #define SPRN_IABR2	0x3FA		/* 83xx */
 #define SPRN_IBCR	0x135		/* 83xx Insn Breakpoint Control Reg */
 #define SPRN_HID4	0x3F4		/* 970 HID4 */
+#define SPRN_HID4_GEKKO	0x3F3		/* Gekko HID4 */
 #define SPRN_HID5	0x3F6		/* 970 HID5 */
 #define SPRN_HID6	0x3F9	/* BE HID 6 */
 #define   HID6_LB	(0x0F<<12) /* Concurrent Large Page Modes */
@@ -464,6 +478,14 @@
 #define SPRN_USIA	0x3AB	/* User Sampled Instruction Address Register */
 #define SPRN_VRSAVE	0x100	/* Vector Register Save Register */
 #define SPRN_XER	0x001	/* Fixed Point Exception Register */
+
+#define SPRN_MMCR0_GEKKO 0x3B8 /* Gekko Monitor Mode Control Register 0 */
+#define SPRN_MMCR1_GEKKO 0x3BC /* Gekko Monitor Mode Control Register 1 */
+#define SPRN_PMC1_GEKKO  0x3B9 /* Gekko Performance Monitor Control 1 */
+#define SPRN_PMC2_GEKKO  0x3BA /* Gekko Performance Monitor Control 2 */
+#define SPRN_PMC3_GEKKO  0x3BD /* Gekko Performance Monitor Control 3 */
+#define SPRN_PMC4_GEKKO  0x3BE /* Gekko Performance Monitor Control 4 */
+#define SPRN_WPAR_GEKKO  0x399 /* Gekko Write Pipe Address Register */
 
 #define SPRN_SCOMC	0x114	/* SCOM Access Control */
 #define SPRN_SCOMD	0x115	/* SCOM Access DATA */
@@ -817,6 +839,7 @@
 #define PVR_403GC	0x00200200
 #define PVR_403GCX	0x00201400
 #define PVR_405GP	0x40110000
+#define PVR_476		0x11a52000
 #define PVR_STB03XXX	0x40310000
 #define PVR_NP405H	0x41410000
 #define PVR_NP405L	0x41610000
@@ -839,6 +862,8 @@
 #define PVR_7450	0x80000000
 #define PVR_8540	0x80200000
 #define PVR_8560	0x80200000
+#define PVR_VER_E500V1	0x8020
+#define PVR_VER_E500V2	0x8021
 /*
  * For the 8xx processors, all of them report the same PVR family for
  * the PowerPC core. The various versions of these processors must be
@@ -853,6 +878,9 @@
 #define PVR_8245	0x80811014
 #define PVR_8260	PVR_8240
 
+/* 476 Simulator seems to currently have the PVR of the 602... */
+#define PVR_476_ISS	0x00052000
+
 /* 64-bit processors */
 /* XXX the prefix should be PVR_, we'll do a global sweep to fix it one day */
 #define PV_NORTHSTAR	0x0033
@@ -864,6 +892,7 @@
 #define PV_970		0x0039
 #define PV_POWER5	0x003A
 #define PV_POWER5p	0x003B
+#define PV_POWER7	0x003F
 #define PV_970FX	0x003C
 #define PV_630		0x0040
 #define PV_630p	0x0041
@@ -876,7 +905,7 @@
 #ifndef __ASSEMBLY__
 #define mfmsr()		({unsigned long rval; \
 			asm volatile("mfmsr %0" : "=r" (rval)); rval;})
-#ifdef CONFIG_PPC64
+#ifdef CONFIG_PPC_BOOK3S_64
 #define __mtmsrd(v, l)	asm volatile("mtmsrd %0," __stringify(l) \
 				     : : "r" (v) : "memory")
 #define mtmsrd(v)	__mtmsrd((v), 0)
@@ -937,7 +966,14 @@
 #ifdef CONFIG_PPC64
 
 extern void ppc64_runlatch_on(void);
-extern void ppc64_runlatch_off(void);
+extern void __ppc64_runlatch_off(void);
+
+#define ppc64_runlatch_off()					\
+	do {							\
+		if (cpu_has_feature(CPU_FTR_CTRL) &&		\
+		    test_thread_flag(TIF_RUNLATCH))		\
+			__ppc64_runlatch_off();			\
+	} while (0)
 
 extern unsigned long scom970_read(unsigned int address);
 extern void scom970_write(unsigned int address, unsigned long value);

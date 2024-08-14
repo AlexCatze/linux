@@ -305,7 +305,6 @@ static int wis_tw9903_remove(struct i2c_client *client)
 {
 	struct wis_tw9903 *dec = i2c_get_clientdata(client);
 
-	i2c_set_clientdata(client, NULL);
 	kfree(dec);
 	return 0;
 }
@@ -314,6 +313,7 @@ static const struct i2c_device_id wis_tw9903_id[] = {
 	{ "wis_tw9903", 0 },
 	{ }
 };
+MODULE_DEVICE_TABLE(i2c, wis_tw9903_id);
 
 static struct i2c_driver wis_tw9903_driver = {
 	.driver = {

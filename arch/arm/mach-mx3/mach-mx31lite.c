@@ -13,10 +13,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #include <linux/types.h>
@@ -31,6 +27,7 @@
 #include <linux/usb/otg.h>
 #include <linux/usb/ulpi.h>
 #include <linux/mtd/physmap.h>
+#include <linux/delay.h>
 
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
@@ -42,14 +39,11 @@
 #include <mach/hardware.h>
 #include <mach/common.h>
 #include <mach/board-mx31lite.h>
-#include <mach/imx-uart.h>
 #include <mach/iomux-mx3.h>
 #include <mach/irqs.h>
-#include <mach/mxc_nand.h>
-#include <mach/spi.h>
-#include <mach/mxc_ehci.h>
 #include <mach/ulpi.h>
 
+#include "devices-imx31.h"
 #include "devices.h"
 
 /*
@@ -69,7 +63,8 @@ static unsigned int mx31lite_pins[] = {
 	MX31_PIN_CSPI2_SS2__SS2,
 };
 
-static struct mxc_nand_platform_data mx31lite_nand_board_info = {
+static const struct mxc_nand_platform_data
+mx31lite_nand_board_info __initconst  = {
 	.width = 1,
 	.hw_ecc = 1,
 };
@@ -112,14 +107,14 @@ static int spi_internal_chipselect[] = {
 	MXC_SPI_CS(0),
 };
 
-static struct spi_imx_master spi1_pdata = {
+static const struct spi_imx_master spi1_pdata __initconst = {
 	.chipselect	= spi_internal_chipselect,
 	.num_chipselect	= ARRAY_SIZE(spi_internal_chipselect),
 };
 
-static struct mc13783_platform_data mc13783_pdata __initdata = {
-	.flags  = MC13783_USE_RTC |
-		  MC13783_USE_REGULATOR,
+static struct mc13xxx_platform_data mc13783_pdata __initdata = {
+	.flags  = MC13XXX_USE_RTC |
+		  MC13XXX_USE_REGULATOR,
 };
 
 static struct spi_board_info mc13783_spi_dev __initdata = {
@@ -135,7 +130,6 @@ static struct spi_board_info mc13783_spi_dev __initdata = {
  * USB
  */
 
-#if defined(CONFIG_USB_ULPI)
 #define USB_PAD_CFG (PAD_CTL_DRV_MAX | PAD_CTL_SRE_FAST | PAD_CTL_HYS_CMOS | \
 			PAD_CTL_ODE_CMOS | PAD_CTL_100K_PU)
 
@@ -173,15 +167,15 @@ static int usbh2_init(struct platform_device *pdev)
 	gpio_request(IOMUX_TO_GPIO(MX31_PIN_DTR_DCE1), "USBH2 CS");
 	gpio_direction_output(IOMUX_TO_GPIO(MX31_PIN_DTR_DCE1), 0);
 
-	return 0;
+	mdelay(10);
+
+	return mx31_initialize_usb_hw(pdev->id, MXC_EHCI_POWER_PINS_ENABLED);
 }
 
-static struct mxc_usbh_platform_data usbh2_pdata = {
+static struct mxc_usbh_platform_data usbh2_pdata __initdata = {
 	.init   = usbh2_init,
 	.portsc = MXC_EHCI_MODE_ULPI | MXC_EHCI_UTMI_8BIT,
-	.flags  = MXC_EHCI_POWER_PINS_ENABLED,
 };
-#endif
 
 /*
  * NOR flash
@@ -233,7 +227,7 @@ void __init mx31lite_map_io(void)
 static int mx31lite_baseboard;
 core_param(mx31lite_baseboard, mx31lite_baseboard, int, 0444);
 
-static void __init mxc_board_init(void)
+static void __init mx31lite_init(void)
 {
 	int ret;
 
@@ -253,18 +247,16 @@ static void __init mxc_board_init(void)
 
 	/* NOR and NAND flash */
 	platform_device_register(&physmap_flash_device);
-	mxc_register_device(&mxc_nand_device, &mx31lite_nand_board_info);
+	imx31_add_mxc_nand(&mx31lite_nand_board_info);
 
-	mxc_register_device(&mxc_spi_device1, &spi1_pdata);
+	imx31_add_spi_imx1(&spi1_pdata);
 	spi_register_board_info(&mc13783_spi_dev, 1);
 
-#if defined(CONFIG_USB_ULPI)
 	/* USB */
-	usbh2_pdata.otg = otg_ulpi_create(&mxc_ulpi_access_ops,
-				USB_OTG_DRV_VBUS | USB_OTG_DRV_VBUS_EXT);
-
-	mxc_register_device(&mxc_usbh2, &usbh2_pdata);
-#endif
+	usbh2_pdata.otg = imx_otg_ulpi_create(ULPI_OTG_DRVVBUS |
+			ULPI_OTG_DRVVBUS_EXT);
+	if (usbh2_pdata.otg)
+		imx31_add_mxc_ehci_hs(2, &usbh2_pdata);
 
 	/* SMSC9117 IRQ pin */
 	ret = gpio_request(IOMUX_TO_GPIO(MX31_PIN_SFS6), "sms9117-irq");
@@ -287,11 +279,10 @@ struct sys_timer mx31lite_timer = {
 
 MACHINE_START(MX31LITE, "LogicPD i.MX31 SOM")
 	/* Maintainer: Freescale Semiconductor, Inc. */
-	.phys_io        = MX31_AIPS1_BASE_ADDR,
-	.io_pg_offst    = (MX31_AIPS1_BASE_ADDR_VIRT >> 18) & 0xfffc,
-	.boot_params    = MX3x_PHYS_OFFSET + 0x100,
-	.map_io         = mx31lite_map_io,
-	.init_irq       = mx31_init_irq,
-	.init_machine   = mxc_board_init,
-	.timer          = &mx31lite_timer,
+	.boot_params = MX3x_PHYS_OFFSET + 0x100,
+	.map_io = mx31lite_map_io,
+	.init_early = imx31_init_early,
+	.init_irq = mx31_init_irq,
+	.timer = &mx31lite_timer,
+	.init_machine = mx31lite_init,
 MACHINE_END

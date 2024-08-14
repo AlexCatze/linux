@@ -124,7 +124,7 @@ MODULE_LICENSE("GPL");
 #define TX_BUF_SIZE 8192
 #define DMA_BUF_SIZE (RX_BUF_SIZE + 16)	/* 8k + 16 bytes for trailers */
 
-#define TX_TIMEOUT	10
+#define TX_TIMEOUT	(HZ/10)
 
 struct znet_private {
 	int rx_dma, tx_dma;
@@ -587,7 +587,6 @@ static netdev_tx_t znet_send_packet(struct sk_buff *skb, struct net_device *dev)
 		}
 		spin_unlock_irqrestore (&znet->lock, flags);
 
-		dev->trans_start = jiffies;
 		netif_start_queue (dev);
 
 		if (znet_debug > 4)
@@ -653,7 +652,7 @@ static irqreturn_t znet_interrupt(int irq, void *dev_id)
 					dev->stats.tx_errors++;
 
 				/* Transceiver may be stuck if cable
-				 * was removed while emiting a
+				 * was removed while emitting a
 				 * packet. Flip it off, then on to
 				 * reset it. This is very empirical,
 				 * but it seems to work. */
@@ -802,7 +801,6 @@ static void znet_rx(struct net_device *dev)
 	/* If any worth-while packets have been received, dev_rint()
 	   has done a mark_bh(INET_BH) for us and will work on them
 	   when we get to the bottom-half routine. */
-	return;
 }
 
 /* The inverse routine to znet_open(). */

@@ -476,22 +476,31 @@ static uint32_t dm9000_get_rx_csum(struct net_device *dev)
 	return dm->rx_csum;
 }
 
-static int dm9000_set_rx_csum(struct net_device *dev, uint32_t data)
+static int dm9000_set_rx_csum_unlocked(struct net_device *dev, uint32_t data)
 {
 	board_info_t *dm = to_dm9000_board(dev);
-	unsigned long flags;
 
 	if (dm->can_csum) {
 		dm->rx_csum = data;
-
-		spin_lock_irqsave(&dm->lock, flags);
 		iow(dm, DM9000_RCSR, dm->rx_csum ? RCSR_CSUM : 0);
-		spin_unlock_irqrestore(&dm->lock, flags);
 
 		return 0;
 	}
 
 	return -EOPNOTSUPP;
+}
+
+static int dm9000_set_rx_csum(struct net_device *dev, uint32_t data)
+{
+	board_info_t *dm = to_dm9000_board(dev);
+	unsigned long flags;
+	int ret;
+
+	spin_lock_irqsave(&dm->lock, flags);
+	ret = dm9000_set_rx_csum_unlocked(dev, data);
+	spin_unlock_irqrestore(&dm->lock, flags);
+
+	return ret;
 }
 
 static int dm9000_set_tx_csum(struct net_device *dev, uint32_t data)
@@ -612,9 +621,9 @@ static int dm9000_set_wol(struct net_device *dev, struct ethtool_wolinfo *w)
 		/* change in wol state, update IRQ state */
 
 		if (!dm->wake_state)
-			set_irq_wake(dm->irq_wake, 1);
+			irq_set_irq_wake(dm->irq_wake, 1);
 		else if (dm->wake_state & !opts)
-			set_irq_wake(dm->irq_wake, 0);
+			irq_set_irq_wake(dm->irq_wake, 0);
 	}
 
 	dm->wake_state = opts;
@@ -722,19 +731,16 @@ static unsigned char dm9000_type_to_char(enum dm9000_type type)
  *  Set DM9000 multicast address
  */
 static void
-dm9000_hash_table(struct net_device *dev)
+dm9000_hash_table_unlocked(struct net_device *dev)
 {
 	board_info_t *db = netdev_priv(dev);
-	struct dev_mc_list *mcptr;
+	struct netdev_hw_addr *ha;
 	int i, oft;
 	u32 hash_val;
 	u16 hash_table[4];
 	u8 rcr = RCR_DIS_LONG | RCR_DIS_CRC | RCR_RXEN;
-	unsigned long flags;
 
 	dm9000_dbg(db, 1, "entering %s\n", __func__);
-
-	spin_lock_irqsave(&db->lock, flags);
 
 	for (i = 0, oft = DM9000_PAR; i < 6; i++, oft++)
 		iow(db, oft, dev->dev_addr[i]);
@@ -753,8 +759,8 @@ dm9000_hash_table(struct net_device *dev)
 		rcr |= RCR_ALL;
 
 	/* the multicast address in Hash Table : 64 bits */
-	netdev_for_each_mc_addr(mcptr, dev) {
-		hash_val = ether_crc_le(6, mcptr->dmi_addr) & 0x3f;
+	netdev_for_each_mc_addr(ha, dev) {
+		hash_val = ether_crc_le(6, ha->addr) & 0x3f;
 		hash_table[hash_val / 16] |= (u16) 1 << (hash_val % 16);
 	}
 
@@ -765,11 +771,21 @@ dm9000_hash_table(struct net_device *dev)
 	}
 
 	iow(db, DM9000_RCR, rcr);
+}
+
+static void
+dm9000_hash_table(struct net_device *dev)
+{
+	board_info_t *db = netdev_priv(dev);
+	unsigned long flags;
+
+	spin_lock_irqsave(&db->lock, flags);
+	dm9000_hash_table_unlocked(dev);
 	spin_unlock_irqrestore(&db->lock, flags);
 }
 
 /*
- * Initilize dm9000 board
+ * Initialize dm9000 board
  */
 static void
 dm9000_init_dm9000(struct net_device *dev)
@@ -784,12 +800,9 @@ dm9000_init_dm9000(struct net_device *dev)
 	db->io_mode = ior(db, DM9000_ISR) >> 6;	/* ISR bit7:6 keeps I/O mode */
 
 	/* Checksum mode */
-	dm9000_set_rx_csum(dev, db->rx_csum);
+	dm9000_set_rx_csum_unlocked(dev, db->rx_csum);
 
-	/* GPIO0 on pre-activate PHY */
-	iow(db, DM9000_GPR, 0);	/* REG_1F bit0 activate phyxcer */
 	iow(db, DM9000_GPCR, GPCR_GEP_CNTL);	/* Let GPIO0 output */
-	iow(db, DM9000_GPR, 0);	/* Enable PHY */
 
 	ncr = (db->flags & DM9000_PLATF_EXT_PHY) ? NCR_EXT_PHY : 0;
 
@@ -811,7 +824,7 @@ dm9000_init_dm9000(struct net_device *dev)
 	iow(db, DM9000_ISR, ISR_CLR_STATUS); /* Clear interrupt status */
 
 	/* Set address filter table */
-	dm9000_hash_table(dev);
+	dm9000_hash_table_unlocked(dev);
 
 	imr = IMR_PAR | IMR_PTM | IMR_PRM;
 	if (db->type != TYPE_DM9000E)
@@ -825,7 +838,7 @@ dm9000_init_dm9000(struct net_device *dev)
 	/* Init Driver variable */
 	db->tx_pkt_cnt = 0;
 	db->queue_pkt_len = 0;
-	dev->trans_start = 0;
+	dev->trans_start = jiffies;
 }
 
 /* Our watchdog timed out. Called by the networking layer */
@@ -836,14 +849,14 @@ static void dm9000_timeout(struct net_device *dev)
 	unsigned long flags;
 
 	/* Save previous register address */
-	reg_save = readb(db->io_addr);
 	spin_lock_irqsave(&db->lock, flags);
+	reg_save = readb(db->io_addr);
 
 	netif_stop_queue(dev);
 	dm9000_reset(db);
 	dm9000_init_dm9000(dev);
 	/* We can accept TX packets again */
-	dev->trans_start = jiffies;
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	netif_wake_queue(dev);
 
 	/* Restore previous register address */
@@ -945,7 +958,7 @@ struct dm9000_rxhdr {
 	u8	RxPktReady;
 	u8	RxStatus;
 	__le16	RxLen;
-} __attribute__((__packed__));
+} __packed;
 
 /*
  *  Received a packet and pass to upper layer
@@ -1040,7 +1053,7 @@ dm9000_rx(struct net_device *dev)
 				if ((((rxbyte & 0x1c) << 3) & rxbyte) == 0)
 					skb->ip_summed = CHECKSUM_UNNECESSARY;
 				else
-					skb->ip_summed = CHECKSUM_NONE;
+					skb_checksum_none_assert(skb);
 			}
 			netif_rx(skb);
 			dev->stats.rx_packets++;
@@ -1177,6 +1190,10 @@ dm9000_open(struct net_device *dev)
 
 	if (request_irq(dev->irq, dm9000_interrupt, irqflags, dev->name, dev))
 		return -EAGAIN;
+
+	/* GPIO0 on pre-activate PHY, Reg 1F is not set by reset */
+	iow(db, DM9000_GPR, 0);	/* REG_1F bit0 activate phyxcer */
+	mdelay(1); /* delay needs by DM9000B */
 
 	/* Initialize DM9000 board */
 	dm9000_reset(db);
@@ -1407,13 +1424,13 @@ dm9000_probe(struct platform_device *pdev)
 		} else {
 
 			/* test to see if irq is really wakeup capable */
-			ret = set_irq_wake(db->irq_wake, 1);
+			ret = irq_set_irq_wake(db->irq_wake, 1);
 			if (ret) {
 				dev_err(db->dev, "irq %d cannot set wakeup (%d)\n",
 					db->irq_wake, ret);
 				ret = 0;
 			} else {
-				set_irq_wake(db->irq_wake, 0);
+				irq_set_irq_wake(db->irq_wake, 0);
 				db->wake_supported = 1;
 			}
 		}
@@ -1576,9 +1593,14 @@ dm9000_probe(struct platform_device *pdev)
 			ndev->dev_addr[i] = ior(db, i+DM9000_PAR);
 	}
 
-	if (!is_valid_ether_addr(ndev->dev_addr))
+	if (!is_valid_ether_addr(ndev->dev_addr)) {
 		dev_warn(db->dev, "%s: Invalid ethernet MAC address. Please "
 			 "set using ifconfig\n", ndev->name);
+
+		random_ether_addr(ndev->dev_addr);
+		mac_src = "random";
+	}
+
 
 	platform_set_drvdata(pdev, ndev);
 	ret = register_netdev(ndev);
@@ -1659,7 +1681,7 @@ dm9000_drv_remove(struct platform_device *pdev)
 	platform_set_drvdata(pdev, NULL);
 
 	unregister_netdev(ndev);
-	dm9000_release_board(pdev, (board_info_t *) netdev_priv(ndev));
+	dm9000_release_board(pdev, netdev_priv(ndev));
 	free_netdev(ndev);		/* free device structure */
 
 	dev_dbg(&pdev->dev, "released and freed device\n");

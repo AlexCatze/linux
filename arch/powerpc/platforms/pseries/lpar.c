@@ -248,11 +248,13 @@ void vpa_init(int cpu)
 	int hwcpu = get_hard_smp_processor_id(cpu);
 	unsigned long addr;
 	long ret;
+	struct paca_struct *pp;
+	struct dtl_entry *dtl;
 
 	if (cpu_has_feature(CPU_FTR_ALTIVEC))
-		lppaca[cpu].vmxregs_in_use = 1;
+		lppaca_of(cpu).vmxregs_in_use = 1;
 
-	addr = __pa(&lppaca[cpu]);
+	addr = __pa(&lppaca_of(cpu));
 	ret = register_vpa(hwcpu, addr);
 
 	if (ret) {
@@ -273,6 +275,25 @@ void vpa_init(int cpu)
 			       "WARNING: vpa_init: SLB shadow buffer "
 			       "registration for cpu %d (hw %d) of area %lx "
 			       "returns %ld\n", cpu, hwcpu, addr, ret);
+	}
+
+	/*
+	 * Register dispatch trace log, if one has been allocated.
+	 */
+	pp = &paca[cpu];
+	dtl = pp->dispatch_log;
+	if (dtl) {
+		pp->dtl_ridx = 0;
+		pp->dtl_curr = dtl;
+		lppaca_of(cpu).dtl_idx = 0;
+
+		/* hypervisor reads buffer length from this field */
+		dtl->enqueue_to_dispatch_time = DISPATCH_LOG_BYTES;
+		ret = register_dtl(hwcpu, __pa(dtl));
+		if (ret)
+			pr_warn("DTL registration failed for cpu %d (%ld)\n",
+				cpu, ret);
+		lppaca_of(cpu).dtl_enable_mask = 2;
 	}
 }
 
@@ -367,21 +388,28 @@ static void pSeries_lpar_hptab_clear(void)
 {
 	unsigned long size_bytes = 1UL << ppc64_pft_size;
 	unsigned long hpte_count = size_bytes >> 4;
-	unsigned long dummy1, dummy2, dword0;
+	struct {
+		unsigned long pteh;
+		unsigned long ptel;
+	} ptes[4];
 	long lpar_rc;
-	int i;
+	int i, j;
 
-	/* TODO: Use bulk call */
-	for (i = 0; i < hpte_count; i++) {
-		/* dont remove HPTEs with VRMA mappings */
-		lpar_rc = plpar_pte_remove_raw(H_ANDCOND, i, HPTE_V_1TB_SEG,
-						&dummy1, &dummy2);
-		if (lpar_rc == H_NOT_FOUND) {
-			lpar_rc = plpar_pte_read_raw(0, i, &dword0, &dummy1);
-			if (!lpar_rc && ((dword0 & HPTE_V_VRMA_MASK)
-				!= HPTE_V_VRMA_MASK))
-				/* Can be hpte for 1TB Seg. So remove it */
-				plpar_pte_remove_raw(0, i, 0, &dummy1, &dummy2);
+	/* Read in batches of 4,
+	 * invalidate only valid entries not in the VRMA
+	 * hpte_count will be a multiple of 4
+         */
+	for (i = 0; i < hpte_count; i += 4) {
+		lpar_rc = plpar_pte_read_4_raw(0, i, (void *)ptes);
+		if (lpar_rc != H_SUCCESS)
+			continue;
+		for (j = 0; j < 4; j++){
+			if ((ptes[j].pteh & HPTE_V_VRMA_MASK) ==
+				HPTE_V_VRMA_MASK)
+				continue;
+			if (ptes[j].pteh & HPTE_V_VALID)
+				plpar_pte_remove_raw(0, i + j, 0,
+					&(ptes[j].pteh), &(ptes[j].ptel));
 		}
 	}
 }
@@ -599,6 +627,18 @@ static void pSeries_lpar_flush_hash_range(unsigned long number, int local)
 		spin_unlock_irqrestore(&pSeries_lpar_tlbie_lock, flags);
 }
 
+static int __init disable_bulk_remove(char *str)
+{
+	if (strcmp(str, "off") == 0 &&
+	    firmware_has_feature(FW_FEATURE_BULK_REMOVE)) {
+			printk(KERN_INFO "Disabling BULK_REMOVE firmware feature");
+			powerpc_firmware_features &= ~FW_FEATURE_BULK_REMOVE;
+	}
+	return 1;
+}
+
+__setup("bulk_remove=", disable_bulk_remove);
+
 void __init hpte_init_lpar(void)
 {
 	ppc_md.hpte_invalidate	= pSeries_lpar_hpte_invalidate;
@@ -673,6 +713,13 @@ EXPORT_SYMBOL(arch_free_page);
 /* NB: reg/unreg are called while guarded with the tracepoints_mutex */
 extern long hcall_tracepoint_refcount;
 
+/* 
+ * Since the tracing code might execute hcalls we need to guard against
+ * recursion. One example of this are spinlocks calling H_YIELD on
+ * shared processor partitions.
+ */
+static DEFINE_PER_CPU(unsigned int, hcall_trace_depth);
+
 void hcall_tracepoint_regfunc(void)
 {
 	hcall_tracepoint_refcount++;
@@ -685,12 +732,42 @@ void hcall_tracepoint_unregfunc(void)
 
 void __trace_hcall_entry(unsigned long opcode, unsigned long *args)
 {
+	unsigned long flags;
+	unsigned int *depth;
+
+	local_irq_save(flags);
+
+	depth = &__get_cpu_var(hcall_trace_depth);
+
+	if (*depth)
+		goto out;
+
+	(*depth)++;
 	trace_hcall_entry(opcode, args);
+	(*depth)--;
+
+out:
+	local_irq_restore(flags);
 }
 
 void __trace_hcall_exit(long opcode, unsigned long retval,
 			unsigned long *retbuf)
 {
+	unsigned long flags;
+	unsigned int *depth;
+
+	local_irq_save(flags);
+
+	depth = &__get_cpu_var(hcall_trace_depth);
+
+	if (*depth)
+		goto out;
+
+	(*depth)++;
 	trace_hcall_exit(opcode, retval, retbuf);
+	(*depth)--;
+
+out:
+	local_irq_restore(flags);
 }
 #endif

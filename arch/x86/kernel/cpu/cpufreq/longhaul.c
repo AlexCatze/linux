@@ -426,7 +426,7 @@ static int guess_fsb(int mult)
 }
 
 
-static int __init longhaul_get_ranges(void)
+static int __cpuinit longhaul_get_ranges(void)
 {
 	unsigned int i, j, k = 0;
 	unsigned int ratio;
@@ -444,7 +444,7 @@ static int __init longhaul_get_ranges(void)
 		return -EINVAL;
 	}
 	/* Get max multiplier - as we always did.
-	 * Longhaul MSR is usefull only when voltage scaling is enabled.
+	 * Longhaul MSR is useful only when voltage scaling is enabled.
 	 * C3 is booting at max anyway. */
 	maxmult = mult;
 	/* Get min multiplier */
@@ -530,7 +530,7 @@ static int __init longhaul_get_ranges(void)
 }
 
 
-static void __init longhaul_setup_voltagescaling(void)
+static void __cpuinit longhaul_setup_voltagescaling(void)
 {
 	union msr_longhaul longhaul;
 	struct mV_pos minvid, maxvid, vid;
@@ -784,7 +784,7 @@ static int longhaul_setup_southbridge(void)
 	return 0;
 }
 
-static int __init longhaul_cpu_init(struct cpufreq_policy *policy)
+static int __cpuinit longhaul_cpu_init(struct cpufreq_policy *policy)
 {
 	struct cpuinfo_x86 *c = &cpu_data(0);
 	char *cpuname = NULL;
@@ -1011,7 +1011,7 @@ static void __exit longhaul_exit(void)
  * trigger frequency transition in some cases. */
 module_param(disable_acpi_c3, int, 0644);
 MODULE_PARM_DESC(disable_acpi_c3, "Don't use ACPI C3 support");
-/* Change CPU voltage with frequency. Very usefull to save
+/* Change CPU voltage with frequency. Very useful to save
  * power, but most VIA C3 processors aren't supporting it. */
 module_param(scale_voltage, int, 0644);
 MODULE_PARM_DESC(scale_voltage, "Scale voltage of processor");

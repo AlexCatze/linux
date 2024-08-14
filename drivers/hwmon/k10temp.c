@@ -1,5 +1,5 @@
 /*
- * k10temp.c - AMD Family 10h/11h processor hardware monitoring
+ * k10temp.c - AMD Family 10h/11h/12h/14h processor hardware monitoring
  *
  * Copyright (c) 2009 Clemens Ladisch <clemens@ladisch.de>
  *
@@ -25,7 +25,7 @@
 #include <linux/pci.h>
 #include <asm/processor.h>
 
-MODULE_DESCRIPTION("AMD Family 10h/11h CPU core temperature monitor");
+MODULE_DESCRIPTION("AMD Family 10h/11h/12h/14h CPU core temperature monitor");
 MODULE_AUTHOR("Clemens Ladisch <clemens@ladisch.de>");
 MODULE_LICENSE("GPL");
 
@@ -112,11 +112,21 @@ static bool __devinit has_erratum_319(struct pci_dev *pdev)
 	if (pkg_type != CPUID_PKGTYPE_AM2R2_AM3)
 		return false;
 
-	/* Differentiate between AM2+ (bad) and AM3 (good) */
+	/* DDR3 memory implies socket AM3, which is good */
 	pci_bus_read_config_dword(pdev->bus,
 				  PCI_DEVFN(PCI_SLOT(pdev->devfn), 2),
 				  REG_DCT0_CONFIG_HIGH, &reg_dram_cfg);
-	return !(reg_dram_cfg & DDR3_MODE);
+	if (reg_dram_cfg & DDR3_MODE)
+		return false;
+
+	/*
+	 * Unfortunately it is possible to run a socket AM3 CPU with DDR2
+	 * memory. We blacklist all the cores which do exist in socket AM2+
+	 * format. It still isn't perfect, as RB-C2 cores exist in both AM2+
+	 * and AM3 formats, but that's the best we can do.
+	 */
+	return boot_cpu_data.x86_model < 4 ||
+	       (boot_cpu_data.x86_model == 4 && boot_cpu_data.x86_mask <= 2);
 }
 
 static int __devinit k10temp_probe(struct pci_dev *pdev,
@@ -198,6 +208,7 @@ static void __devexit k10temp_remove(struct pci_dev *pdev)
 static const struct pci_device_id k10temp_id_table[] = {
 	{ PCI_VDEVICE(AMD, PCI_DEVICE_ID_AMD_10H_NB_MISC) },
 	{ PCI_VDEVICE(AMD, PCI_DEVICE_ID_AMD_11H_NB_MISC) },
+	{ PCI_VDEVICE(AMD, PCI_DEVICE_ID_AMD_CNB17H_F3) },
 	{}
 };
 MODULE_DEVICE_TABLE(pci, k10temp_id_table);

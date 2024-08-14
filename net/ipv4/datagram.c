@@ -46,11 +46,12 @@ int ip4_datagram_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 		if (!saddr)
 			saddr = inet->mc_addr;
 	}
-	err = ip_route_connect(&rt, usin->sin_addr.s_addr, saddr,
-			       RT_CONN_FLAGS(sk), oif,
-			       sk->sk_protocol,
-			       inet->inet_sport, usin->sin_port, sk, 1);
-	if (err) {
+	rt = ip_route_connect(usin->sin_addr.s_addr, saddr,
+			      RT_CONN_FLAGS(sk), oif,
+			      sk->sk_protocol,
+			      inet->inet_sport, usin->sin_port, sk, true);
+	if (IS_ERR(rt)) {
+		err = PTR_ERR(rt);
 		if (err == -ENETUNREACH)
 			IP_INC_STATS_BH(sock_net(sk), IPSTATS_MIB_OUTNOROUTES);
 		return err;
@@ -62,16 +63,17 @@ int ip4_datagram_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	}
 	if (!inet->inet_saddr)
 		inet->inet_saddr = rt->rt_src;	/* Update source address */
-	if (!inet->inet_rcv_saddr)
+	if (!inet->inet_rcv_saddr) {
 		inet->inet_rcv_saddr = rt->rt_src;
+		if (sk->sk_prot->rehash)
+			sk->sk_prot->rehash(sk);
+	}
 	inet->inet_daddr = rt->rt_dst;
 	inet->inet_dport = usin->sin_port;
 	sk->sk_state = TCP_ESTABLISHED;
 	inet->inet_id = jiffies;
 
-	sk_dst_set(sk, &rt->u.dst);
-	return(0);
+	sk_dst_set(sk, &rt->dst);
+	return 0;
 }
-
 EXPORT_SYMBOL(ip4_datagram_connect);
-

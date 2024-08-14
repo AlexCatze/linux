@@ -25,6 +25,9 @@
 #ifndef _LOGGING_H_
 #define _LOGGING_H_
 
+#define LOWORD(dw) ((unsigned short)(dw))
+#define HIWORD(dw) ((unsigned short)(((unsigned int) (dw) >> 16) & 0xFFFF))
+
 /* #include <linux/init.h> */
 /* #include <linux/module.h> */
 
@@ -61,13 +64,6 @@
 
 extern unsigned int vmbus_loglevel;
 
-#define ASSERT(expr)	\
-	if (!(expr)) {	\
-		printk(KERN_CRIT "Assertion failed! %s,%s,%s,line=%d\n", \
-		       #expr, __FILE__, __func__, __LINE__);	\
-		__asm__ __volatile__("int3");	\
-	}
-
 #define DPRINT(mod, lvl, fmt, args...) do {\
 	if ((mod & (HIWORD(vmbus_loglevel))) &&	\
 	    (lvl <= LOWORD(vmbus_loglevel)))	\
@@ -98,22 +94,5 @@ extern unsigned int vmbus_loglevel;
 		printk(KERN_ERR #mod": %s() ERROR!! " fmt "\n",	\
 		       __func__, ## args);\
 	} while (0)
-
-#ifdef DEBUG
-#define DPRINT_ENTER(mod) do {\
-	if ((mod & (HIWORD(vmbus_loglevel))) && \
-	    (DEBUG_LVL_ENTEREXIT <= LOWORD(vmbus_loglevel)))	\
-		printk(KERN_DEBUG "["#mod"]: %s() enter\n", __func__);\
-	} while (0)
-
-#define DPRINT_EXIT(mod) do {\
-	if ((mod & (HIWORD(vmbus_loglevel))) && \
-	    (DEBUG_LVL_ENTEREXIT <= LOWORD(vmbus_loglevel)))	\
-		printk(KERN_DEBUG "["#mod"]: %s() exit\n", __func__);\
-	} while (0)
-#else
-#define DPRINT_ENTER(mod)
-#define DPRINT_EXIT(mod)
-#endif
 
 #endif /* _LOGGING_H_ */

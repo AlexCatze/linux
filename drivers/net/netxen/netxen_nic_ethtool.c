@@ -214,7 +214,6 @@ skip:
 			check_sfp_module = netif_running(dev) &&
 				adapter->has_link_events;
 		} else {
-			ecmd->autoneg = AUTONEG_ENABLE;
 			ecmd->supported |= (SUPPORTED_TP |SUPPORTED_Autoneg);
 			ecmd->advertising |=
 				(ADVERTISED_TP | ADVERTISED_Autoneg);
@@ -252,53 +251,24 @@ static int
 netxen_nic_set_settings(struct net_device *dev, struct ethtool_cmd *ecmd)
 {
 	struct netxen_adapter *adapter = netdev_priv(dev);
-	__u32 status;
+	int ret;
 
-	/* read which mode */
-	if (adapter->ahw.port_type == NETXEN_NIC_GBE) {
-		/* autonegotiation */
-		if (adapter->phy_write &&
-		    adapter->phy_write(adapter,
-				       NETXEN_NIU_GB_MII_MGMT_ADDR_AUTONEG,
-				       ecmd->autoneg) != 0)
-			return -EIO;
-		else
-			adapter->link_autoneg = ecmd->autoneg;
-
-		if (adapter->phy_read &&
-		    adapter->phy_read(adapter,
-				      NETXEN_NIU_GB_MII_MGMT_ADDR_PHY_STATUS,
-				      &status) != 0)
-			return -EIO;
-
-		/* speed */
-		switch (ecmd->speed) {
-		case SPEED_10:
-			netxen_set_phy_speed(status, 0);
-			break;
-		case SPEED_100:
-			netxen_set_phy_speed(status, 1);
-			break;
-		case SPEED_1000:
-			netxen_set_phy_speed(status, 2);
-			break;
-		}
-		/* set duplex mode */
-		if (ecmd->duplex == DUPLEX_HALF)
-			netxen_clear_phy_duplex(status);
-		if (ecmd->duplex == DUPLEX_FULL)
-			netxen_set_phy_duplex(status);
-		if (adapter->phy_write &&
-		    adapter->phy_write(adapter,
-				       NETXEN_NIU_GB_MII_MGMT_ADDR_PHY_STATUS,
-				       *((int *)&status)) != 0)
-			return -EIO;
-		else {
-			adapter->link_speed = ecmd->speed;
-			adapter->link_duplex = ecmd->duplex;
-		}
-	} else
+	if (adapter->ahw.port_type != NETXEN_NIC_GBE)
 		return -EOPNOTSUPP;
+
+	if (!(adapter->capabilities & NX_FW_CAPABILITY_GBE_LINK_CFG))
+		return -EOPNOTSUPP;
+
+	ret = nx_fw_cmd_set_gbe_port(adapter, ecmd->speed, ecmd->duplex,
+				     ecmd->autoneg);
+	if (ret == NX_RCODE_NOT_SUPPORTED)
+		return -EOPNOTSUPP;
+	else if (ret)
+		return -EIO;
+
+	adapter->link_speed = ecmd->speed;
+	adapter->link_duplex = ecmd->duplex;
+	adapter->link_autoneg = ecmd->autoneg;
 
 	if (!netif_running(dev))
 		return 0;
@@ -632,6 +602,9 @@ static int netxen_nic_reg_test(struct net_device *dev)
 	if ((data_read & 0xffff) != adapter->pdev->vendor)
 		return 1;
 
+	if (NX_IS_REVISION_P3(adapter->ahw.revision_id))
+		return 0;
+
 	data_written = (u32)0xa5a5a5a5;
 
 	NXWR32(adapter, CRB_SCRATCHPAD_TEST, data_written);
@@ -703,6 +676,11 @@ netxen_nic_get_ethtool_stats(struct net_device *dev,
 	}
 }
 
+static u32 netxen_nic_get_tx_csum(struct net_device *dev)
+{
+	return dev->features & NETIF_F_IP_CSUM;
+}
+
 static u32 netxen_nic_get_rx_csum(struct net_device *dev)
 {
 	struct netxen_adapter *adapter = netdev_priv(dev);
@@ -712,7 +690,21 @@ static u32 netxen_nic_get_rx_csum(struct net_device *dev)
 static int netxen_nic_set_rx_csum(struct net_device *dev, u32 data)
 {
 	struct netxen_adapter *adapter = netdev_priv(dev);
-	adapter->rx_csum = !!data;
+
+	if (data) {
+		adapter->rx_csum = data;
+		return 0;
+	}
+
+	if (dev->features & NETIF_F_LRO) {
+		if (netxen_config_hw_lro(adapter, NETXEN_NIC_LRO_DISABLED))
+			return -EIO;
+
+		dev->features &= ~NETIF_F_LRO;
+		netxen_send_lro_cleanup(adapter);
+		netdev_info(dev, "disabling LRO as rx_csum is off\n");
+	}
+	adapter->rx_csum = data;
 	return 0;
 }
 
@@ -879,12 +871,27 @@ static int netxen_nic_set_flags(struct net_device *netdev, u32 data)
 	struct netxen_adapter *adapter = netdev_priv(netdev);
 	int hw_lro;
 
+	if (ethtool_invalid_flags(netdev, data, ETH_FLAG_LRO))
+		return -EINVAL;
+
 	if (!(adapter->capabilities & NX_FW_CAPABILITY_HW_LRO))
 		return -EINVAL;
 
-	ethtool_op_set_flags(netdev, data);
+	if (!adapter->rx_csum) {
+		netdev_info(netdev, "rx csum is off, cannot toggle LRO\n");
+		return -EINVAL;
+	}
 
-	hw_lro = (data & ETH_FLAG_LRO) ? NETXEN_NIC_LRO_ENABLED : 0;
+	if (!!(data & ETH_FLAG_LRO) == !!(netdev->features & NETIF_F_LRO))
+		return 0;
+
+	if (data & ETH_FLAG_LRO) {
+		hw_lro = NETXEN_NIC_LRO_ENABLED;
+		netdev->features |= NETIF_F_LRO;
+	} else {
+		hw_lro = NETXEN_NIC_LRO_DISABLED;
+		netdev->features &= ~NETIF_F_LRO;
+	}
 
 	if (netxen_config_hw_lro(adapter, hw_lro))
 		return -EIO;
@@ -909,6 +916,7 @@ const struct ethtool_ops netxen_nic_ethtool_ops = {
 	.set_ringparam = netxen_nic_set_ringparam,
 	.get_pauseparam = netxen_nic_get_pauseparam,
 	.set_pauseparam = netxen_nic_set_pauseparam,
+	.get_tx_csum = netxen_nic_get_tx_csum,
 	.set_tx_csum = ethtool_op_set_tx_csum,
 	.set_sg = ethtool_op_set_sg,
 	.get_tso = netxen_nic_get_tso,

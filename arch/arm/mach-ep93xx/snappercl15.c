@@ -125,11 +125,11 @@ static struct platform_device snappercl15_nand_device = {
 	.num_resources		= ARRAY_SIZE(snappercl15_nand_resource),
 };
 
-static struct ep93xx_eth_data snappercl15_eth_data = {
+static struct ep93xx_eth_data __initdata snappercl15_eth_data = {
 	.phy_id			= 1,
 };
 
-static struct i2c_gpio_platform_data snappercl15_i2c_gpio_data = {
+static struct i2c_gpio_platform_data __initdata snappercl15_i2c_gpio_data = {
 	.sda_pin		= EP93XX_GPIO_LINE_EEDAT,
 	.sda_is_open_drain	= 0,
 	.scl_pin		= EP93XX_GPIO_LINE_EECLK,
@@ -145,7 +145,7 @@ static struct i2c_board_info __initdata snappercl15_i2c_data[] = {
 	},
 };
 
-static struct ep93xxfb_mach_info snappercl15_fb_info = {
+static struct ep93xxfb_mach_info __initdata snappercl15_fb_info = {
 	.num_modes		= EP93XXFB_USE_MODEDB,
 	.bpp			= 16,
 };
@@ -157,13 +157,12 @@ static void __init snappercl15_init_machine(void)
 	ep93xx_register_i2c(&snappercl15_i2c_gpio_data, snappercl15_i2c_data,
 			    ARRAY_SIZE(snappercl15_i2c_data));
 	ep93xx_register_fb(&snappercl15_fb_info);
+	ep93xx_register_i2s();
 	platform_device_register(&snappercl15_nand_device);
 }
 
 MACHINE_START(SNAPPER_CL15, "Bluewater Systems Snapper CL15")
 	/* Maintainer: Ryan Mallon <ryan@bluewatersys.com> */
-	.phys_io	= EP93XX_APB_PHYS_BASE,
-	.io_pg_offst	= ((EP93XX_APB_VIRT_BASE) >> 18) & 0xfffc,
 	.boot_params	= EP93XX_SDCE0_PHYS_BASE + 0x100,
 	.map_io		= ep93xx_map_io,
 	.init_irq	= ep93xx_init_irq,

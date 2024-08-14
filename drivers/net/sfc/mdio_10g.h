@@ -1,6 +1,6 @@
 /****************************************************************************
  * Driver for Solarflare Solarstorm network controllers and boards
- * Copyright 2006-2009 Solarflare Communications Inc.
+ * Copyright 2006-2011 Solarflare Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
@@ -51,7 +51,8 @@ static inline bool efx_mdio_phyxgxs_lane_sync(struct efx_nic *efx)
 
 	sync = !!(lane_status & MDIO_PHYXS_LNSTAT_ALIGN);
 	if (!sync)
-		EFX_LOG(efx, "XGXS lane status: %x\n", lane_status);
+		netif_dbg(efx, hw, efx->net_dev, "XGXS lane status: %x\n",
+			  lane_status);
 	return sync;
 }
 
@@ -67,8 +68,7 @@ extern int efx_mdio_reset_mmd(struct efx_nic *efx, int mmd,
 			      int spins, int spintime);
 
 /* As efx_mdio_check_mmd but for multiple MMDs */
-int efx_mdio_check_mmds(struct efx_nic *efx,
-			unsigned int mmd_mask, unsigned int fatal_mask);
+int efx_mdio_check_mmds(struct efx_nic *efx, unsigned int mmd_mask);
 
 /* Check the link status of specified mmds in bit mask */
 extern bool efx_mdio_links_ok(struct efx_nic *efx, unsigned int mmd_mask);

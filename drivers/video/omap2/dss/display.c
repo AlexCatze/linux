@@ -25,13 +25,10 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/jiffies.h>
-#include <linux/list.h>
 #include <linux/platform_device.h>
 
 #include <plat/display.h>
 #include "dss.h"
-
-static LIST_HEAD(display_list);
 
 static ssize_t display_enabled_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -81,6 +78,9 @@ static ssize_t display_upd_mode_store(struct device *dev,
 	struct omap_dss_device *dssdev = to_dss_device(dev);
 	int val, r;
 	enum omap_dss_update_mode mode;
+
+	if (!dssdev->driver->set_update_mode)
+		return -EINVAL;
 
 	val = simple_strtoul(buf, NULL, 10);
 
@@ -342,7 +342,7 @@ int omapdss_default_get_recommended_bpp(struct omap_dss_device *dssdev)
 			return 16;
 	case OMAP_DISPLAY_TYPE_VENC:
 	case OMAP_DISPLAY_TYPE_SDI:
-		return 24;
+	case OMAP_DISPLAY_TYPE_HDMI:
 		return 24;
 	default:
 		BUG();
@@ -369,6 +369,7 @@ bool dss_use_replication(struct omap_dss_device *dssdev,
 	case OMAP_DISPLAY_TYPE_DPI:
 		bpp = dssdev->phy.dpi.data_lines;
 		break;
+	case OMAP_DISPLAY_TYPE_HDMI:
 	case OMAP_DISPLAY_TYPE_VENC:
 	case OMAP_DISPLAY_TYPE_SDI:
 		bpp = 24;
@@ -392,30 +393,11 @@ void dss_init_device(struct platform_device *pdev,
 	int r;
 
 	switch (dssdev->type) {
-	case OMAP_DISPLAY_TYPE_DPI:
-#ifdef CONFIG_OMAP2_DSS_RFBI
-	case OMAP_DISPLAY_TYPE_DBI:
-#endif
-#ifdef CONFIG_OMAP2_DSS_SDI
-	case OMAP_DISPLAY_TYPE_SDI:
-#endif
-#ifdef CONFIG_OMAP2_DSS_DSI
-	case OMAP_DISPLAY_TYPE_DSI:
-#endif
-#ifdef CONFIG_OMAP2_DSS_VENC
-	case OMAP_DISPLAY_TYPE_VENC:
-#endif
-		break;
-	default:
-		DSSERR("Support for display '%s' not compiled in.\n",
-				dssdev->name);
-		return;
-	}
-
-	switch (dssdev->type) {
+#ifdef CONFIG_OMAP2_DSS_DPI
 	case OMAP_DISPLAY_TYPE_DPI:
 		r = dpi_init_display(dssdev);
 		break;
+#endif
 #ifdef CONFIG_OMAP2_DSS_RFBI
 	case OMAP_DISPLAY_TYPE_DBI:
 		r = rfbi_init_display(dssdev);
@@ -436,8 +418,13 @@ void dss_init_device(struct platform_device *pdev,
 		r = dsi_init_display(dssdev);
 		break;
 #endif
+	case OMAP_DISPLAY_TYPE_HDMI:
+		r = hdmi_init_display(dssdev);
+		break;
 	default:
-		BUG();
+		DSSERR("Support for display '%s' not compiled in.\n",
+				dssdev->name);
+		return;
 	}
 
 	if (r) {
@@ -541,7 +528,10 @@ int dss_resume_all_devices(void)
 static int dss_disable_device(struct device *dev, void *data)
 {
 	struct omap_dss_device *dssdev = to_dss_device(dev);
-	dssdev->driver->disable(dssdev);
+
+	if (dssdev->state != OMAP_DSS_DISPLAY_DISABLED)
+		dssdev->driver->disable(dssdev);
+
 	return 0;
 }
 

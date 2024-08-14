@@ -93,13 +93,13 @@ enum inter_frame_gap {
 #define GMAC_CONTROL_IPC	0x00000400 /* Checksum Offload */
 #define GMAC_CONTROL_DR		0x00000200 /* Disable Retry */
 #define GMAC_CONTROL_LUD	0x00000100 /* Link up/down */
-#define GMAC_CONTROL_ACS	0x00000080 /* Automatic Pad Stripping */
+#define GMAC_CONTROL_ACS	0x00000080 /* Automatic Pad/FCS Stripping */
 #define GMAC_CONTROL_DC		0x00000010 /* Deferral Check */
 #define GMAC_CONTROL_TE		0x00000008 /* Transmitter Enable */
 #define GMAC_CONTROL_RE		0x00000004 /* Receiver Enable */
 
 #define GMAC_CORE_INIT (GMAC_CONTROL_JD | GMAC_CONTROL_PS | GMAC_CONTROL_ACS | \
-			GMAC_CONTROL_IPC | GMAC_CONTROL_JE | GMAC_CONTROL_BE)
+			GMAC_CONTROL_JE | GMAC_CONTROL_BE)
 
 /* GMAC Frame Filter defines */
 #define GMAC_FRAME_FILTER_PR	0x00000001	/* Promiscuous Mode */
@@ -172,7 +172,6 @@ enum rfd {
 	deac_full_minus_4 = 0x00401800,
 };
 #define DMA_CONTROL_TSF		0x00200000 /* Transmit  Store and Forward */
-#define DMA_CONTROL_FTF		0x00100000 /* Flush transmit FIFO */
 
 enum ttc_control {
 	DMA_CONTROL_TTC_64 = 0x00000000,
@@ -206,15 +205,4 @@ enum rtc_control {
 #define GMAC_MMC_TX_INTR   0x108
 #define GMAC_MMC_RX_CSUM_OFFLOAD   0x208
 
-#undef DWMAC1000_DEBUG
-/* #define DWMAC1000__DEBUG */
-#undef FRAME_FILTER_DEBUG
-/* #define FRAME_FILTER_DEBUG */
-#ifdef DWMAC1000__DEBUG
-#define DBG(fmt, args...)  printk(fmt, ## args)
-#else
-#define DBG(fmt, args...)  do { } while (0)
-#endif
-
-extern struct stmmac_dma_ops dwmac1000_dma_ops;
-extern struct stmmac_desc_ops dwmac1000_desc_ops;
+extern const struct stmmac_dma_ops dwmac1000_dma_ops;

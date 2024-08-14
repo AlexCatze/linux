@@ -1,6 +1,6 @@
 /*
    BlueZ - Bluetooth protocol stack for Linux
-   Copyright (C) 2000-2001 Qualcomm Incorporated
+   Copyright (c) 2000-2001, 2010, Code Aurora Forum. All rights reserved.
 
    Written 2000,2001 by Maxim Krasnyansky <maxk@qualcomm.com>
 
@@ -39,11 +39,38 @@
 #include <net/sock.h>
 
 #include <asm/system.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/unaligned.h>
 
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
+
+static void hci_le_connect(struct hci_conn *conn)
+{
+	struct hci_dev *hdev = conn->hdev;
+	struct hci_cp_le_create_conn cp;
+
+	conn->state = BT_CONNECT;
+	conn->out = 1;
+	conn->link_mode |= HCI_LM_MASTER;
+
+	memset(&cp, 0, sizeof(cp));
+	cp.scan_interval = cpu_to_le16(0x0004);
+	cp.scan_window = cpu_to_le16(0x0004);
+	bacpy(&cp.peer_addr, &conn->dst);
+	cp.conn_interval_min = cpu_to_le16(0x0008);
+	cp.conn_interval_max = cpu_to_le16(0x0100);
+	cp.supervision_timeout = cpu_to_le16(0x0064);
+	cp.min_ce_len = cpu_to_le16(0x0001);
+	cp.max_ce_len = cpu_to_le16(0x0001);
+
+	hci_send_cmd(hdev, HCI_OP_LE_CREATE_CONN, sizeof(cp), &cp);
+}
+
+static void hci_le_connect_cancel(struct hci_conn *conn)
+{
+	hci_send_cmd(conn->hdev, HCI_OP_LE_CREATE_CONN_CANCEL, 0, NULL);
+}
 
 void hci_acl_connect(struct hci_conn *conn)
 {
@@ -66,7 +93,8 @@ void hci_acl_connect(struct hci_conn *conn)
 	bacpy(&cp.bdaddr, &conn->dst);
 	cp.pscan_rep_mode = 0x02;
 
-	if ((ie = hci_inquiry_cache_lookup(hdev, &conn->dst))) {
+	ie = hci_inquiry_cache_lookup(hdev, &conn->dst);
+	if (ie) {
 		if (inquiry_entry_age(ie) <= INQUIRY_ENTRY_AGE_MAX) {
 			cp.pscan_rep_mode = ie->data.pscan_rep_mode;
 			cp.pscan_mode     = ie->data.pscan_mode;
@@ -155,6 +183,47 @@ void hci_setup_sync(struct hci_conn *conn, __u16 handle)
 	hci_send_cmd(hdev, HCI_OP_SETUP_SYNC_CONN, sizeof(cp), &cp);
 }
 
+void hci_le_conn_update(struct hci_conn *conn, u16 min, u16 max,
+					u16 latency, u16 to_multiplier)
+{
+	struct hci_cp_le_conn_update cp;
+	struct hci_dev *hdev = conn->hdev;
+
+	memset(&cp, 0, sizeof(cp));
+
+	cp.handle		= cpu_to_le16(conn->handle);
+	cp.conn_interval_min	= cpu_to_le16(min);
+	cp.conn_interval_max	= cpu_to_le16(max);
+	cp.conn_latency		= cpu_to_le16(latency);
+	cp.supervision_timeout	= cpu_to_le16(to_multiplier);
+	cp.min_ce_len		= cpu_to_le16(0x0001);
+	cp.max_ce_len		= cpu_to_le16(0x0001);
+
+	hci_send_cmd(hdev, HCI_OP_LE_CONN_UPDATE, sizeof(cp), &cp);
+}
+EXPORT_SYMBOL(hci_le_conn_update);
+
+/* Device _must_ be locked */
+void hci_sco_setup(struct hci_conn *conn, __u8 status)
+{
+	struct hci_conn *sco = conn->link;
+
+	BT_DBG("%p", conn);
+
+	if (!sco)
+		return;
+
+	if (!status) {
+		if (lmp_esco_capable(conn->hdev))
+			hci_setup_sync(sco, conn->handle);
+		else
+			hci_add_sco(sco, conn->handle);
+	} else {
+		hci_proto_connect_cfm(sco, status);
+		hci_conn_del(sco);
+	}
+}
+
 static void hci_conn_timeout(unsigned long arg)
 {
 	struct hci_conn *conn = (void *) arg;
@@ -171,8 +240,12 @@ static void hci_conn_timeout(unsigned long arg)
 	switch (conn->state) {
 	case BT_CONNECT:
 	case BT_CONNECT2:
-		if (conn->type == ACL_LINK && conn->out)
-			hci_acl_connect_cancel(conn);
+		if (conn->out) {
+			if (conn->type == ACL_LINK)
+				hci_acl_connect_cancel(conn);
+			else if (conn->type == LE_LINK)
+				hci_le_connect_cancel(conn);
+		}
 		break;
 	case BT_CONFIG:
 	case BT_CONNECTED:
@@ -212,6 +285,8 @@ struct hci_conn *hci_conn_add(struct hci_dev *hdev, int type, bdaddr_t *dst)
 	conn->mode  = HCI_CM_ACTIVE;
 	conn->state = BT_OPEN;
 	conn->auth_type = HCI_AT_GENERAL_BONDING;
+	conn->io_capability = hdev->io_capability;
+	conn->remote_auth = 0xff;
 
 	conn->power_save = 1;
 	conn->disc_timeout = HCI_DISCONN_TIMEOUT;
@@ -273,6 +348,11 @@ int hci_conn_del(struct hci_conn *conn)
 
 		/* Unacked frames */
 		hdev->acl_cnt += conn->sent;
+	} else if (conn->type == LE_LINK) {
+		if (hdev->le_pkts)
+			hdev->le_cnt += conn->sent;
+		else
+			hdev->acl_cnt += conn->sent;
 	} else {
 		struct hci_conn *acl = conn->link;
 		if (acl) {
@@ -338,24 +418,43 @@ struct hci_dev *hci_get_route(bdaddr_t *dst, bdaddr_t *src)
 }
 EXPORT_SYMBOL(hci_get_route);
 
-/* Create SCO or ACL connection.
+/* Create SCO, ACL or LE connection.
  * Device _must_ be locked */
 struct hci_conn *hci_connect(struct hci_dev *hdev, int type, bdaddr_t *dst, __u8 sec_level, __u8 auth_type)
 {
 	struct hci_conn *acl;
 	struct hci_conn *sco;
+	struct hci_conn *le;
 
 	BT_DBG("%s dst %s", hdev->name, batostr(dst));
 
-	if (!(acl = hci_conn_hash_lookup_ba(hdev, ACL_LINK, dst))) {
-		if (!(acl = hci_conn_add(hdev, ACL_LINK, dst)))
+	if (type == LE_LINK) {
+		le = hci_conn_hash_lookup_ba(hdev, LE_LINK, dst);
+		if (le)
+			return ERR_PTR(-EBUSY);
+		le = hci_conn_add(hdev, LE_LINK, dst);
+		if (!le)
+			return ERR_PTR(-ENOMEM);
+		if (le->state == BT_OPEN)
+			hci_le_connect(le);
+
+		hci_conn_hold(le);
+
+		return le;
+	}
+
+	acl = hci_conn_hash_lookup_ba(hdev, ACL_LINK, dst);
+	if (!acl) {
+		acl = hci_conn_add(hdev, ACL_LINK, dst);
+		if (!acl)
 			return NULL;
 	}
 
 	hci_conn_hold(acl);
 
 	if (acl->state == BT_OPEN || acl->state == BT_CLOSED) {
-		acl->sec_level = sec_level;
+		acl->sec_level = BT_SECURITY_LOW;
+		acl->pending_sec_level = sec_level;
 		acl->auth_type = auth_type;
 		hci_acl_connect(acl);
 	}
@@ -363,8 +462,10 @@ struct hci_conn *hci_connect(struct hci_dev *hdev, int type, bdaddr_t *dst, __u8
 	if (type == ACL_LINK)
 		return acl;
 
-	if (!(sco = hci_conn_hash_lookup_ba(hdev, type, dst))) {
-		if (!(sco = hci_conn_add(hdev, type, dst))) {
+	sco = hci_conn_hash_lookup_ba(hdev, type, dst);
+	if (!sco) {
+		sco = hci_conn_add(hdev, type, dst);
+		if (!sco) {
 			hci_conn_put(acl);
 			return NULL;
 		}
@@ -380,10 +481,13 @@ struct hci_conn *hci_connect(struct hci_dev *hdev, int type, bdaddr_t *dst, __u8
 		acl->power_save = 1;
 		hci_conn_enter_active_mode(acl);
 
-		if (lmp_esco_capable(hdev))
-			hci_setup_sync(sco, acl->handle);
-		else
-			hci_add_sco(sco, acl->handle);
+		if (test_bit(HCI_CONN_MODE_CHANGE_PEND, &acl->pend)) {
+			/* defer SCO setup until mode change completed */
+			set_bit(HCI_CONN_SCO_SETUP_PEND, &acl->pend);
+			return sco;
+		}
+
+		hci_sco_setup(acl, 0x00);
 	}
 
 	return sco;
@@ -408,10 +512,16 @@ static int hci_conn_auth(struct hci_conn *conn, __u8 sec_level, __u8 auth_type)
 {
 	BT_DBG("conn %p", conn);
 
+	if (conn->pending_sec_level > sec_level)
+		sec_level = conn->pending_sec_level;
+
 	if (sec_level > conn->sec_level)
-		conn->sec_level = sec_level;
+		conn->pending_sec_level = sec_level;
 	else if (conn->link_mode & HCI_LM_AUTH)
 		return 1;
+
+	/* Make sure we preserve an existing MITM requirement*/
+	auth_type |= (conn->auth_type & 0x01);
 
 	conn->auth_type = auth_type;
 
@@ -618,10 +728,12 @@ int hci_get_conn_list(void __user *arg)
 
 	size = sizeof(req) + req.conn_num * sizeof(*ci);
 
-	if (!(cl = kmalloc(size, GFP_KERNEL)))
+	cl = kmalloc(size, GFP_KERNEL);
+	if (!cl)
 		return -ENOMEM;
 
-	if (!(hdev = hci_dev_get(req.dev_id))) {
+	hdev = hci_dev_get(req.dev_id);
+	if (!hdev) {
 		kfree(cl);
 		return -ENODEV;
 	}

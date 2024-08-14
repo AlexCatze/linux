@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2009 Analog Devices Inc.
+ * Copyright 2004-2010 Analog Devices Inc.
  *
  * Licensed under the GPL-2 or later.
  */
@@ -215,10 +215,47 @@ void __init bfin_relocate_l1_mem(void)
 
 	early_dma_memcpy_done();
 
+#if defined(CONFIG_SMP) && defined(CONFIG_ICACHE_FLUSH_L1)
+	blackfin_iflush_l1_entry[0] = (unsigned long)blackfin_icache_flush_range_l1;
+#endif
+
 	/* if necessary, copy L2 text/data to L2 SRAM */
 	if (L2_LENGTH && l2_len)
 		memcpy(_stext_l2, _l2_lma, l2_len);
 }
+
+#ifdef CONFIG_SMP
+void __init bfin_relocate_coreb_l1_mem(void)
+{
+	unsigned long text_l1_len = (unsigned long)_text_l1_len;
+	unsigned long data_l1_len = (unsigned long)_data_l1_len;
+	unsigned long data_b_l1_len = (unsigned long)_data_b_l1_len;
+
+	blackfin_dma_early_init();
+
+	/* if necessary, copy L1 text to L1 instruction SRAM */
+	if (L1_CODE_LENGTH && text_l1_len)
+		early_dma_memcpy((void *)COREB_L1_CODE_START, _text_l1_lma,
+				text_l1_len);
+
+	/* if necessary, copy L1 data to L1 data bank A SRAM */
+	if (L1_DATA_A_LENGTH && data_l1_len)
+		early_dma_memcpy((void *)COREB_L1_DATA_A_START, _data_l1_lma,
+				data_l1_len);
+
+	/* if necessary, copy L1 data B to L1 data bank B SRAM */
+	if (L1_DATA_B_LENGTH && data_b_l1_len)
+		early_dma_memcpy((void *)COREB_L1_DATA_B_START, _data_b_l1_lma,
+				data_b_l1_len);
+
+	early_dma_memcpy_done();
+
+#ifdef CONFIG_ICACHE_FLUSH_L1
+	blackfin_iflush_l1_entry[1] = (unsigned long)blackfin_icache_flush_range_l1 -
+			(unsigned long)_stext_l1 + COREB_L1_CODE_START;
+#endif
+}
+#endif
 
 #ifdef CONFIG_ROMKERNEL
 void __init bfin_relocate_xip_data(void)
@@ -864,6 +901,13 @@ void __init setup_arch(char **cmdline_p)
 	bfin_write_EBIU_MODE(CONFIG_EBIU_MODEVAL);
 	bfin_write_EBIU_FCTL(CONFIG_EBIU_FCTLVAL);
 #endif
+#ifdef CONFIG_BFIN_HYSTERESIS_CONTROL
+	bfin_write_PORTF_HYSTERISIS(HYST_PORTF_0_15);
+	bfin_write_PORTG_HYSTERISIS(HYST_PORTG_0_15);
+	bfin_write_PORTH_HYSTERISIS(HYST_PORTH_0_15);
+	bfin_write_MISCPORT_HYSTERISIS((bfin_read_MISCPORT_HYSTERISIS() &
+					~HYST_NONEGPIO_MASK) | HYST_NONEGPIO);
+#endif
 
 	cclk = get_cclk();
 	sclk = get_sclk();
@@ -925,7 +969,7 @@ void __init setup_arch(char **cmdline_p)
 	else if (_bfin_swrst & RESET_SOFTWARE)
 		printk(KERN_NOTICE "Reset caused by Software reset\n");
 
-	printk(KERN_INFO "Blackfin support (C) 2004-2009 Analog Devices, Inc.\n");
+	printk(KERN_INFO "Blackfin support (C) 2004-2010 Analog Devices, Inc.\n");
 	if (bfin_compiled_revid() == 0xffff)
 		printk(KERN_INFO "Compiled for ADSP-%s Rev any, running on 0.%d\n", CPU, bfin_revid());
 	else if (bfin_compiled_revid() == -1)

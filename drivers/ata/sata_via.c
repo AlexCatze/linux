@@ -148,7 +148,7 @@ static struct ata_port_operations vt8251_ops = {
 };
 
 static const struct ata_port_info vt6420_port_info = {
-	.flags		= ATA_FLAG_SATA | ATA_FLAG_NO_LEGACY,
+	.flags		= ATA_FLAG_SATA,
 	.pio_mask	= ATA_PIO4,
 	.mwdma_mask	= ATA_MWDMA2,
 	.udma_mask	= ATA_UDMA6,
@@ -156,7 +156,7 @@ static const struct ata_port_info vt6420_port_info = {
 };
 
 static struct ata_port_info vt6421_sport_info = {
-	.flags		= ATA_FLAG_SATA | ATA_FLAG_NO_LEGACY,
+	.flags		= ATA_FLAG_SATA,
 	.pio_mask	= ATA_PIO4,
 	.mwdma_mask	= ATA_MWDMA2,
 	.udma_mask	= ATA_UDMA6,
@@ -164,7 +164,7 @@ static struct ata_port_info vt6421_sport_info = {
 };
 
 static struct ata_port_info vt6421_pport_info = {
-	.flags		= ATA_FLAG_SLAVE_POSS | ATA_FLAG_NO_LEGACY,
+	.flags		= ATA_FLAG_SLAVE_POSS,
 	.pio_mask	= ATA_PIO4,
 	/* No MWDMA */
 	.udma_mask	= ATA_UDMA6,
@@ -172,8 +172,7 @@ static struct ata_port_info vt6421_pport_info = {
 };
 
 static struct ata_port_info vt8251_port_info = {
-	.flags		= ATA_FLAG_SATA | ATA_FLAG_SLAVE_POSS |
-			  ATA_FLAG_NO_LEGACY,
+	.flags		= ATA_FLAG_SATA | ATA_FLAG_SLAVE_POSS,
 	.pio_mask	= ATA_PIO4,
 	.mwdma_mask	= ATA_MWDMA2,
 	.udma_mask	= ATA_UDMA6,
@@ -308,7 +307,7 @@ static void svia_noop_freeze(struct ata_port *ap)
 	 * certain way.  Leave it alone and just clear pending IRQ.
 	 */
 	ap->ops->sff_check_status(ap);
-	ata_sff_irq_clear(ap);
+	ata_bmdma_irq_clear(ap);
 }
 
 /**
@@ -349,7 +348,7 @@ static int vt6420_prereset(struct ata_link *link, unsigned long deadline)
 
 	/* wait for phy to become ready, if necessary */
 	do {
-		msleep(200);
+		ata_msleep(link->ap, 200);
 		svia_scr_read(link, SCR_STATUS, &sstatus);
 		if ((sstatus & 0xf) != 1)
 			break;
@@ -463,7 +462,7 @@ static int vt6420_prepare_host(struct pci_dev *pdev, struct ata_host **r_host)
 	struct ata_host *host;
 	int rc;
 
-	rc = ata_pci_sff_prepare_host(pdev, ppi, &host);
+	rc = ata_pci_bmdma_prepare_host(pdev, ppi, &host);
 	if (rc)
 		return rc;
 	*r_host = host;
@@ -520,7 +519,7 @@ static int vt8251_prepare_host(struct pci_dev *pdev, struct ata_host **r_host)
 	struct ata_host *host;
 	int i, rc;
 
-	rc = ata_pci_sff_prepare_host(pdev, ppi, &host);
+	rc = ata_pci_bmdma_prepare_host(pdev, ppi, &host);
 	if (rc)
 		return rc;
 	*r_host = host;
@@ -538,7 +537,7 @@ static int vt8251_prepare_host(struct pci_dev *pdev, struct ata_host **r_host)
 	return 0;
 }
 
-static void svia_configure(struct pci_dev *pdev)
+static void svia_configure(struct pci_dev *pdev, int board_id)
 {
 	u8 tmp8;
 
@@ -574,6 +573,34 @@ static void svia_configure(struct pci_dev *pdev)
 			   (int) tmp8);
 		tmp8 |= NATIVE_MODE_ALL;
 		pci_write_config_byte(pdev, SATA_NATIVE_MODE, tmp8);
+	}
+
+	/*
+	 * vt6420/1 has problems talking to some drives.  The following
+	 * is the fix from Joseph Chan <JosephChan@via.com.tw>.
+	 *
+	 * When host issues HOLD, device may send up to 20DW of data
+	 * before acknowledging it with HOLDA and the host should be
+	 * able to buffer them in FIFO.  Unfortunately, some WD drives
+	 * send up to 40DW before acknowledging HOLD and, in the
+	 * default configuration, this ends up overflowing vt6421's
+	 * FIFO, making the controller abort the transaction with
+	 * R_ERR.
+	 *
+	 * Rx52[2] is the internal 128DW FIFO Flow control watermark
+	 * adjusting mechanism enable bit and the default value 0
+	 * means host will issue HOLD to device when the left FIFO
+	 * size goes below 32DW.  Setting it to 1 makes the watermark
+	 * 64DW.
+	 *
+	 * https://bugzilla.kernel.org/show_bug.cgi?id=15173
+	 * http://article.gmane.org/gmane.linux.ide/46352
+	 * http://thread.gmane.org/gmane.linux.kernel/1062139
+	 */
+	if (board_id == vt6420 || board_id == vt6421) {
+		pci_read_config_byte(pdev, 0x52, &tmp8);
+		tmp8 |= 1 << 2;
+		pci_write_config_byte(pdev, 0x52, tmp8);
 	}
 }
 
@@ -625,10 +652,10 @@ static int svia_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (rc)
 		return rc;
 
-	svia_configure(pdev);
+	svia_configure(pdev, board_id);
 
 	pci_set_master(pdev);
-	return ata_host_activate(host, pdev->irq, ata_sff_interrupt,
+	return ata_host_activate(host, pdev->irq, ata_bmdma_interrupt,
 				 IRQF_SHARED, &svia_sht);
 }
 

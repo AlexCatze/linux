@@ -9,9 +9,22 @@ enum {
 };
 
 enum {
-	HW_BREAKPOINT_R = 1,
-	HW_BREAKPOINT_W = 2,
-	HW_BREAKPOINT_X = 4,
+	HW_BREAKPOINT_EMPTY	= 0,
+	HW_BREAKPOINT_R		= 1,
+	HW_BREAKPOINT_W		= 2,
+	HW_BREAKPOINT_RW	= HW_BREAKPOINT_R | HW_BREAKPOINT_W,
+	HW_BREAKPOINT_X		= 4,
+	HW_BREAKPOINT_INVALID   = HW_BREAKPOINT_RW | HW_BREAKPOINT_X,
+};
+
+enum bp_type_idx {
+	TYPE_INST 	= 0,
+#ifdef CONFIG_HAVE_MIXED_BREAKPOINTS_REGS
+	TYPE_DATA	= 0,
+#else
+	TYPE_DATA	= 1,
+#endif
+	TYPE_MAX
 };
 
 #ifdef __KERNEL__
@@ -19,6 +32,8 @@ enum {
 #include <linux/perf_event.h>
 
 #ifdef CONFIG_HAVE_HW_BREAKPOINT
+
+extern int __init init_hw_breakpoint(void);
 
 static inline void hw_breakpoint_init(struct perf_event_attr *attr)
 {
@@ -32,6 +47,12 @@ static inline void hw_breakpoint_init(struct perf_event_attr *attr)
 	 */
 	attr->pinned = 1;
 	attr->sample_period = 1;
+}
+
+static inline void ptrace_breakpoint_init(struct perf_event_attr *attr)
+{
+	hw_breakpoint_init(attr);
+	attr->exclude_kernel = 1;
 }
 
 static inline unsigned long hw_breakpoint_addr(struct perf_event *bp)
@@ -88,6 +109,8 @@ static inline struct arch_hw_breakpoint *counter_arch_bp(struct perf_event *bp)
 }
 
 #else /* !CONFIG_HAVE_HW_BREAKPOINT */
+
+static inline int __init init_hw_breakpoint(void) { return 0; }
 
 static inline struct perf_event *
 register_user_hw_breakpoint(struct perf_event_attr *attr,

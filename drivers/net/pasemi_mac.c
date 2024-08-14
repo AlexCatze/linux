@@ -808,7 +808,7 @@ static int pasemi_mac_clean_rx(struct pasemi_mac_rxring *rx,
 			skb->csum = (macrx & XCT_MACRX_CSUM_M) >>
 					   XCT_MACRX_CSUM_S;
 		} else
-			skb->ip_summed = CHECKSUM_NONE;
+			skb_checksum_none_assert(skb);
 
 		packets++;
 		tot_bytes += len;
@@ -1472,8 +1472,6 @@ static void pasemi_mac_queue_csdesc(const struct sk_buff *skb,
 	txring->next_to_fill = fill;
 
 	write_dma_reg(PAS_DMA_TXCHAN_INCR(txring->chan.chno), 2);
-
-	return;
 }
 
 static int pasemi_mac_start_tx(struct sk_buff *skb, struct net_device *dev)

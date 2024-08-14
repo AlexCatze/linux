@@ -21,8 +21,6 @@
  * Please address comments and feedback to Linas Vepstas <linas@austin.ibm.com>
  */
 
-#undef DEBUG
-
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/list.h>
@@ -67,7 +65,7 @@
  *  with EEH.
  *
  *  Ideally, a PCI device driver, when suspecting that an isolation
- *  event has occured (e.g. by reading 0xff's), will then ask EEH
+ *  event has occurred (e.g. by reading 0xff's), will then ask EEH
  *  whether this is the case, and then take appropriate steps to
  *  reset the PCI slot, the PCI device, and then resume operations.
  *  However, until that day,  the checking is done here, with the
@@ -749,7 +747,7 @@ static void __rtas_set_slot_reset(struct pci_dn *pdn)
 	/* Determine type of EEH reset required by device,
 	 * default hot reset or fundamental reset
 	 */
-	if (dev->needs_freset)
+	if (dev && dev->needs_freset)
 		rtas_pci_slot_reset(pdn, 3);
 	else
 		rtas_pci_slot_reset(pdn, 1);
@@ -878,7 +876,7 @@ void eeh_restore_bars(struct pci_dn *pdn)
  *
  * Save the values of the device bars. Unlike the restore
  * routine, this routine is *not* recursive. This is because
- * PCI devices are added individuallly; but, for the restore,
+ * PCI devices are added individually; but, for the restore,
  * an entire slot is reset at a time.
  */
 static void eeh_save_bars(struct pci_dn *pdn)

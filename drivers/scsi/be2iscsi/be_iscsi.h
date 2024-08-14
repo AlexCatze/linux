@@ -48,18 +48,18 @@ int beiscsi_conn_bind(struct iscsi_cls_session *cls_session,
 		      struct iscsi_cls_conn *cls_conn,
 		      uint64_t transport_fd, int is_leading);
 
-int beiscsi_conn_get_param(struct iscsi_cls_conn *cls_conn,
-			   enum iscsi_param param, char *buf);
+int beiscsi_ep_get_param(struct iscsi_endpoint *ep, enum iscsi_param param,
+			 char *buf);
 
 int beiscsi_get_host_param(struct Scsi_Host *shost,
 			   enum iscsi_host_param param, char *buf);
+
+int beiscsi_get_macaddr(char *buf, struct beiscsi_hba *phba);
 
 int beiscsi_set_param(struct iscsi_cls_conn *cls_conn,
 		      enum iscsi_param param, char *buf, int buflen);
 
 int beiscsi_conn_start(struct iscsi_cls_conn *cls_conn);
-
-void beiscsi_conn_stop(struct iscsi_cls_conn *cls_conn, int flag);
 
 struct iscsi_endpoint *beiscsi_ep_connect(struct Scsi_Host *shost,
 					  struct sockaddr *dst_addr,

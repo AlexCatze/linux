@@ -213,7 +213,7 @@ void __init db88f5281_pci_preinit(void)
 	pin = DB88F5281_PCI_SLOT0_IRQ_PIN;
 	if (gpio_request(pin, "PCI Int1") == 0) {
 		if (gpio_direction_input(pin) == 0) {
-			set_irq_type(gpio_to_irq(pin), IRQ_TYPE_LEVEL_LOW);
+			irq_set_irq_type(gpio_to_irq(pin), IRQ_TYPE_LEVEL_LOW);
 		} else {
 			printk(KERN_ERR "db88f5281_pci_preinit faield to "
 					"set_irq_type pin %d\n", pin);
@@ -226,7 +226,7 @@ void __init db88f5281_pci_preinit(void)
 	pin = DB88F5281_PCI_SLOT1_SLOT2_IRQ_PIN;
 	if (gpio_request(pin, "PCI Int2") == 0) {
 		if (gpio_direction_input(pin) == 0) {
-			set_irq_type(gpio_to_irq(pin), IRQ_TYPE_LEVEL_LOW);
+			irq_set_irq_type(gpio_to_irq(pin), IRQ_TYPE_LEVEL_LOW);
 		} else {
 			printk(KERN_ERR "db88f5281_pci_preinit faield "
 					"to set_irq_type pin %d\n", pin);
@@ -358,11 +358,10 @@ static void __init db88f5281_init(void)
 
 MACHINE_START(DB88F5281, "Marvell Orion-2 Development Board")
 	/* Maintainer: Tzachi Perelstein <tzachi@marvell.com> */
-	.phys_io	= ORION5X_REGS_PHYS_BASE,
-	.io_pg_offst	= ((ORION5X_REGS_VIRT_BASE) >> 18) & 0xfffc,
 	.boot_params	= 0x00000100,
 	.init_machine	= db88f5281_init,
 	.map_io		= orion5x_map_io,
+	.init_early	= orion5x_init_early,
 	.init_irq	= orion5x_init_irq,
 	.timer		= &orion5x_timer,
 MACHINE_END

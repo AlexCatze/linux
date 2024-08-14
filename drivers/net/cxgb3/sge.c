@@ -118,7 +118,7 @@ struct rx_sw_desc {                /* SW state per Rx descriptor */
 		struct sk_buff *skb;
 		struct fl_pg_chunk pg_chunk;
 	};
-	DECLARE_PCI_UNMAP_ADDR(dma_addr);
+	DEFINE_DMA_UNMAP_ADDR(dma_addr);
 };
 
 struct rsp_desc {		/* response queue descriptor */
@@ -199,19 +199,15 @@ static inline void refill_rspq(struct adapter *adapter,
  *	need_skb_unmap - does the platform need unmapping of sk_buffs?
  *
  *	Returns true if the platform needs sk_buff unmapping.  The compiler
- *	optimizes away unecessary code if this returns true.
+ *	optimizes away unnecessary code if this returns true.
  */
 static inline int need_skb_unmap(void)
 {
-	/*
-	 * This structure is used to tell if the platform needs buffer
-	 * unmapping by checking if DECLARE_PCI_UNMAP_ADDR defines anything.
-	 */
-	struct dummy {
-		DECLARE_PCI_UNMAP_ADDR(addr);
-	};
-
-	return sizeof(struct dummy) != 0;
+#ifdef CONFIG_NEED_DMA_MAP_STATE
+	return 1;
+#else
+	return 0;
+#endif
 }
 
 /**
@@ -300,8 +296,10 @@ static void free_tx_desc(struct adapter *adapter, struct sge_txq *q,
 		if (d->skb) {	/* an SGL is present */
 			if (need_unmap)
 				unmap_skb(d->skb, q, cidx, pdev);
-			if (d->eop)
+			if (d->eop) {
 				kfree_skb(d->skb);
+				d->skb = NULL;
+			}
 		}
 		++d;
 		if (++cidx == q->size) {
@@ -363,7 +361,7 @@ static void clear_rx_desc(struct pci_dev *pdev, const struct sge_fl *q,
 		put_page(d->pg_chunk.page);
 		d->pg_chunk.page = NULL;
 	} else {
-		pci_unmap_single(pdev, pci_unmap_addr(d, dma_addr),
+		pci_unmap_single(pdev, dma_unmap_addr(d, dma_addr),
 				 q->buf_size, PCI_DMA_FROMDEVICE);
 		kfree_skb(d->skb);
 		d->skb = NULL;
@@ -419,7 +417,7 @@ static inline int add_one_rx_buf(void *va, unsigned int len,
 	if (unlikely(pci_dma_mapping_error(pdev, mapping)))
 		return -ENOMEM;
 
-	pci_unmap_addr_set(sd, dma_addr, mapping);
+	dma_unmap_addr_set(sd, dma_addr, mapping);
 
 	d->addr_lo = cpu_to_be32(mapping);
 	d->addr_hi = cpu_to_be32((u64) mapping >> 32);
@@ -515,7 +513,7 @@ nomem:				q->alloc_failed++;
 				break;
 			}
 			mapping = sd->pg_chunk.mapping + sd->pg_chunk.offset;
-			pci_unmap_addr_set(sd, dma_addr, mapping);
+			dma_unmap_addr_set(sd, dma_addr, mapping);
 
 			add_one_rx_chunk(mapping, d, q->gen);
 			pci_dma_sync_single_for_device(adap->pdev, mapping,
@@ -791,11 +789,11 @@ static struct sk_buff *get_packet(struct adapter *adap, struct sge_fl *fl,
 		if (likely(skb != NULL)) {
 			__skb_put(skb, len);
 			pci_dma_sync_single_for_cpu(adap->pdev,
-					    pci_unmap_addr(sd, dma_addr), len,
+					    dma_unmap_addr(sd, dma_addr), len,
 					    PCI_DMA_FROMDEVICE);
 			memcpy(skb->data, sd->skb->data, len);
 			pci_dma_sync_single_for_device(adap->pdev,
-					    pci_unmap_addr(sd, dma_addr), len,
+					    dma_unmap_addr(sd, dma_addr), len,
 					    PCI_DMA_FROMDEVICE);
 		} else if (!drop_thres)
 			goto use_orig_buf;
@@ -810,7 +808,7 @@ recycle:
 		goto recycle;
 
 use_orig_buf:
-	pci_unmap_single(adap->pdev, pci_unmap_addr(sd, dma_addr),
+	pci_unmap_single(adap->pdev, dma_unmap_addr(sd, dma_addr),
 			 fl->buf_size, PCI_DMA_FROMDEVICE);
 	skb = sd->skb;
 	skb_put(skb, len);
@@ -843,7 +841,7 @@ static struct sk_buff *get_packet_pg(struct adapter *adap, struct sge_fl *fl,
 	struct sk_buff *newskb, *skb;
 	struct rx_sw_desc *sd = &fl->sdesc[fl->cidx];
 
-	dma_addr_t dma_addr = pci_unmap_addr(sd, dma_addr);
+	dma_addr_t dma_addr = dma_unmap_addr(sd, dma_addr);
 
 	newskb = skb = q->pg_skb;
 	if (!skb && (len <= SGE_RX_COPY_THRES)) {
@@ -1149,7 +1147,7 @@ static void write_tx_pkt_wr(struct adapter *adap, struct sk_buff *skb,
 	cpl->len = htonl(skb->len);
 	cntrl = V_TXPKT_INTF(pi->port_id);
 
-	if (vlan_tx_tag_present(skb) && pi->vlan_grp)
+	if (vlan_tx_tag_present(skb))
 		cntrl |= F_TXPKT_VLAN_VLD | V_TXPKT_VLAN(vlan_tx_tag_get(skb));
 
 	tso_info = V_LSO_MSS(skb_shinfo(skb)->gso_size);
@@ -1283,7 +1281,7 @@ netdev_tx_t t3_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 		qs->port_stats[SGE_PSTAT_TX_CSUM]++;
 	if (skb_shinfo(skb)->gso_size)
 		qs->port_stats[SGE_PSTAT_TSO]++;
-	if (vlan_tx_tag_present(skb) && pi->vlan_grp)
+	if (vlan_tx_tag_present(skb))
 		qs->port_stats[SGE_PSTAT_VLANINS]++;
 
 	/*
@@ -2026,7 +2024,7 @@ static void rx_eth(struct adapter *adap, struct sge_rspq *rq,
 		qs->port_stats[SGE_PSTAT_RX_CSUM_GOOD]++;
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 	} else
-		skb->ip_summed = CHECKSUM_NONE;
+		skb_checksum_none_assert(skb);
 	skb_record_rx_queue(skb, qs - &adap->sge.qs[0]);
 
 	if (unlikely(p->vlan_valid)) {
@@ -2097,7 +2095,7 @@ static void lro_add_page(struct adapter *adap, struct sge_qset *qs,
 	fl->credits--;
 
 	pci_dma_sync_single_for_cpu(adap->pdev,
-				    pci_unmap_addr(sd, dma_addr),
+				    dma_unmap_addr(sd, dma_addr),
 				    fl->buf_size - SGE_PG_RSVD,
 				    PCI_DMA_FROMDEVICE);
 
@@ -2558,7 +2556,7 @@ static inline int handle_responses(struct adapter *adap, struct sge_rspq *q)
  * The MSI-X interrupt handler for an SGE response queue for the non-NAPI case
  * (i.e., response queue serviced in hard interrupt).
  */
-irqreturn_t t3_sge_intr_msix(int irq, void *cookie)
+static irqreturn_t t3_sge_intr_msix(int irq, void *cookie)
 {
 	struct sge_qset *qs = cookie;
 	struct adapter *adap = qs->adap;
@@ -3323,41 +3321,4 @@ void t3_sge_prep(struct adapter *adap, struct sge_params *p)
 	}
 
 	spin_lock_init(&adap->sge.reg_lock);
-}
-
-/**
- *	t3_get_desc - dump an SGE descriptor for debugging purposes
- *	@qs: the queue set
- *	@qnum: identifies the specific queue (0..2: Tx, 3:response, 4..5: Rx)
- *	@idx: the descriptor index in the queue
- *	@data: where to dump the descriptor contents
- *
- *	Dumps the contents of a HW descriptor of an SGE queue.  Returns the
- *	size of the descriptor.
- */
-int t3_get_desc(const struct sge_qset *qs, unsigned int qnum, unsigned int idx,
-		unsigned char *data)
-{
-	if (qnum >= 6)
-		return -EINVAL;
-
-	if (qnum < 3) {
-		if (!qs->txq[qnum].desc || idx >= qs->txq[qnum].size)
-			return -EINVAL;
-		memcpy(data, &qs->txq[qnum].desc[idx], sizeof(struct tx_desc));
-		return sizeof(struct tx_desc);
-	}
-
-	if (qnum == 3) {
-		if (!qs->rspq.desc || idx >= qs->rspq.size)
-			return -EINVAL;
-		memcpy(data, &qs->rspq.desc[idx], sizeof(struct rsp_desc));
-		return sizeof(struct rsp_desc);
-	}
-
-	qnum -= 4;
-	if (!qs->fl[qnum].desc || idx >= qs->fl[qnum].size)
-		return -EINVAL;
-	memcpy(data, &qs->fl[qnum].desc[idx], sizeof(struct rx_desc));
-	return sizeof(struct rx_desc);
 }
