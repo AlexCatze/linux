@@ -972,7 +972,8 @@ static int mt9m111_video_probe(struct soc_camera_device *icd,
 	data = reg_read(CHIP_VERSION);
 
 	switch (data) {
-	case 0x143a: /* MT9M111 or MT9M131 */
+	case 0x143a: /* MT9M111 */
+	case 0x1519:
 		mt9m111->model = V4L2_IDENT_MT9M111;
 		dev_info(&client->dev,
 			"Detected a MT9M111/MT9M131 chip ID %x\n", data);

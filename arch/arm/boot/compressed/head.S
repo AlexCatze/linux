@@ -170,6 +170,7 @@ not_angel:
 
 		.text
 		adr	r0, LC0
+
 		ldmia	r0, {r1, r2, r3, r5, r6, r11, ip}
 		ldr	sp, [r0, #28]
 #ifdef CONFIG_AUTO_ZRELADDR
@@ -177,6 +178,7 @@ not_angel:
 		and	r4, pc, #0xf8000000
 		add	r4, r4, #TEXT_OFFSET
 #else
+
 		ldr	r4, =CONFIG_ZRELADDR
 #endif
 		subs	r0, r0, r1		@ calculate the delta offset
