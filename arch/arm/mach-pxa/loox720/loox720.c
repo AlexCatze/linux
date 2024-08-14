@@ -39,8 +39,8 @@
 #include <asm/mach/flash.h>
 
 #include <mach/pxa2xx-regs.h>
-#include <mach/pxa2xx_spi.h>
-#include <mach/regs-ssp.h>
+#include <linux/spi/pxa2xx_spi.h>
+#include <linux/pxa2xx_ssp.h>
 #include <mach/camera.h>
 #include <mach/udc.h>
 #include <mach/audio.h>
@@ -50,9 +50,9 @@
 #include <mach/pxa27x.h>
 #include <mach/irqs.h>
 #include <mach/pxafb.h>
-#include <mach/pxa27x_keypad.h>
+#include <plat/pxa27x_keypad.h>
 #include <mach/mfp-pxa27x.h>
-#include <plat/i2c.h>
+#include <linux/i2c/pxa-i2c.h>
 
 #include <media/soc_camera.h>
 #include <linux/i2c-gpio.h>
@@ -377,8 +377,8 @@ struct pxa27x_keypad_platform_data loox720_keypad_info = {
  * USB
  ******************************************************************************/
 static struct pxa2xx_udc_mach_info loox720_udc_info __initdata = {
-	.gpio_vbus = GPIO_LOOX720_USB_DETECT_N,
-	.gpio_vbus_inverted = 1,
+	//.gpio_vbus = GPIO_LOOX720_USB_DETECT_N,
+	//.gpio_vbus_inverted = 1,
 	.gpio_pullup = LOOX720_EGPIO_USB_PULLUP,
 };
 
@@ -904,7 +904,7 @@ static void __init loox720_init(void)
 	pxa27x_set_i2c_power_info(NULL);
 	i2c_register_board_info(1, ARRAY_AND_SIZE(loox720_pi2c_board_info));
 
-	set_pxa_fb_info(&loox720_fb_info);
+	pxa_set_fb_info(NULL, &loox720_fb_info);
 	pxa_set_keypad_info(&loox720_keypad_info);
 	pxa_set_mci_info(&loox7xx_mci_info);
 	pxa_set_ficp_info(&loox_ficp_info);
@@ -923,13 +923,13 @@ static void __init loox720_fixup(struct machine_desc *desc,
 {
 	mi->nr_banks = 1;
 	mi->bank[0].start = 0xa8000000;
-	mi->bank[0].node = 0;
+	//mi->bank[0].node = 0;
 	mi->bank[0].size = (128 * 1024 * 1024);
 }
 
 MACHINE_START(LOOX720, "FSC Loox 720")
-	.phys_io = 0x40000000,
-	.io_pg_offst = (io_p2v(0x40000000) >> 18) & 0xfffc,
+	//.phys_io = 0x40000000,
+	//.io_pg_offst = (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.boot_params = 0xa8000100,
 	.map_io = pxa_map_io,
 	.fixup = loox720_fixup,

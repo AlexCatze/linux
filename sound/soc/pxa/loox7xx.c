@@ -34,7 +34,6 @@
 #include <asm/mach-types.h>
 #include <mach/loox720.h>
 #include "../codecs/wm8750.h"
-#include "pxa2xx-pcm.h"
 #include "pxa2xx-i2s.h"
 
 enum {
@@ -74,7 +73,7 @@ static void loox720_ext_control(struct snd_soc_codec *codec)
 static int loox720_startup(struct snd_pcm_substream *substream)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_codec *codec = rtd->socdev->card->codec;
+	struct snd_soc_codec *codec = rtd->codec;
 
 	/* check the jack status at stream startup */
 	loox720_ext_control(codec);
@@ -85,8 +84,8 @@ static int loox720_hw_params(struct snd_pcm_substream *substream,
 	struct snd_pcm_hw_params *params)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *codec_dai = rtd->dai->codec_dai;
-	struct snd_soc_dai *cpu_dai = rtd->dai->cpu_dai;
+	struct snd_soc_dai *codec_dai = rtd->codec_dai;
+	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
 	unsigned int clk = 0;
 	int ret = 0;
 
@@ -236,10 +235,11 @@ static const struct snd_kcontrol_new wm8750_loox720_controls[] = {
 		loox720_set_earpiece),
 };
 
-static int loox720_wm8750_init(struct snd_soc_codec *codec)
+static int loox720_wm8750_init(struct snd_soc_pcm_runtime *rtd)
 {
+	struct snd_soc_codec *codec = rtd->codec;
 	int err;
-	struct snd_soc_card *card = codec->socdev->card;
+	struct snd_soc_card *card = rtd->card;
 
 	/* Add loox720 specific controls */
 	err = snd_soc_add_controls(codec, wm8750_loox720_controls,
@@ -296,16 +296,20 @@ int loox_snd_resume_pre(struct platform_device *pdev) {
 static struct snd_soc_dai_link loox720_dai = {
 	.name = "wm8750",
 	.stream_name = "WM8750",
-	.cpu_dai = &pxa_i2s_dai,
-	.codec_dai = &wm8750_dai,
+	//.cpu_dai = &pxa_i2s_dai,
+	//.codec_dai = &wm8750_dai,
 	.init = loox720_wm8750_init,
 	.ops = &loox720_ops,
+	.cpu_dai_name = "pxa-is2",
+	.codec_dai_name = "wm8750-hifi",
+	.platform_name = "pxa-pcm-audio",
+	.codec_name = "wm8750-codec.0-001a",
 };
 
 /* loox720 audio machine driver */
 static struct snd_soc_card snd_soc_loox720 = {
 	.name = "loox720",
-	.platform = &pxa2xx_soc_platform,
+	//.platform = &pxa2xx_soc_platform,
 	.dai_link = &loox720_dai,
 	.num_links = 1,
 	.suspend_post = loox_snd_suspend_post,
@@ -313,17 +317,17 @@ static struct snd_soc_card snd_soc_loox720 = {
 };
 
 /* loox720 audio private data */
-static struct wm8750_setup_data loox720_wm8750_setup = {
+/*static struct wm8750_setup_data loox720_wm8750_setup = {
 	.i2c_bus = 0,
 	.i2c_address = 0x1a,
-};
+};*/
 
 /* loox720 audio subsystem */
-static struct snd_soc_device loox720_snd_devdata = {
+/*static struct snd_soc_device loox720_snd_devdata = {
 	.card = &snd_soc_loox720,
 	.codec_dev = &soc_codec_dev_wm8750,
 	.codec_data = &loox720_wm8750_setup,
-};
+};*/
 
 static struct platform_device *loox720_snd_device;
 
@@ -347,8 +351,8 @@ static int __init loox720_init(void)
 		goto fail;
 
 
-	platform_set_drvdata(loox720_snd_device, &loox720_snd_devdata);
-	loox720_snd_devdata.dev = &loox720_snd_device->dev;
+	platform_set_drvdata(loox720_snd_device, &snd_soc_loox720);
+	//loox720_snd_devdata.dev = &loox720_snd_device->dev;
 
 	gpio_direction_output(LOOX720_EGPIO_SOUND, 1);
 	gpio_direction_output(LOOX720_EGPIO_SOUND_AMP, 1);

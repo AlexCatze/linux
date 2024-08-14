@@ -216,8 +216,8 @@ void loox720_cpu_pm_enter(suspend_state_t state)
 		break;
 	case PM_SUSPEND_MEM:
 		/* set resume return address */
-		loox720_pxa_ll_pm_suspend(virt_to_phys(pxa_cpu_resume));
-		pxa27x_cpu_suspend(PWRMODE_SLEEP);
+		loox720_pxa_ll_pm_suspend(virt_to_phys(cpu_resume));
+		pxa27x_cpu_suspend(PWRMODE_SLEEP, PLAT_PHYS_OFFSET - PAGE_OFFSET);
 		break;
 	}
 }
