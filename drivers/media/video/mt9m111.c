@@ -1000,10 +1000,10 @@ static struct v4l2_subdev_core_ops mt9m111_subdev_core_ops = {
 #endif
 };
 
-static int mt9m111_enum_fmt(struct v4l2_subdev *sd, int index,
+static int mt9m111_enum_fmt(struct v4l2_subdev *sd, unsigned int index,
 			    enum v4l2_mbus_pixelcode *code)
 {
-	if ((unsigned int)index >= ARRAY_SIZE(mt9m111_colour_fmts))
+	if (index >= ARRAY_SIZE(mt9m111_colour_fmts))
 		return -EINVAL;
 
 	*code = mt9m111_colour_fmts[index].code;
@@ -1069,7 +1069,6 @@ static int mt9m111_probe(struct i2c_client *client,
 	ret = mt9m111_video_probe(icd, client);
 	if (ret) {
 		icd->ops = NULL;
-		i2c_set_clientdata(client, NULL);
 		kfree(mt9m111);
 	}
 
@@ -1082,7 +1081,6 @@ static int mt9m111_remove(struct i2c_client *client)
 	struct soc_camera_device *icd = client->dev.platform_data;
 
 	icd->ops = NULL;
-	i2c_set_clientdata(client, NULL);
 	client->driver = NULL;
 	kfree(mt9m111);
 
