@@ -15,7 +15,7 @@
 /*
  * Physical DRAM offset.
  */
-#define PHYS_OFFSET	UL(0xa0000000)
+#define PHYS_OFFSET	UL(0xa8000000)
 
 /*
  * The nodes are matched with the physical SDRAM banks as follows:
