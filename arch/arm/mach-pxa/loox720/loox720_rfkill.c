@@ -80,7 +80,7 @@ static int loox720_rfk_probe(struct platform_device *dev)
 	if (!bt_rfk)
 		goto err_rfkill;
 
-	rfkill_set_led_trigger_name(bt_rfk, "loox720-bt");
+	//rfkill_set_led_trigger_name(bt_rfk, "loox720-bt"); TODO: Replace with up to date code
 	
 	rc = rfkill_register(bt_rfk);
 	if (rc)

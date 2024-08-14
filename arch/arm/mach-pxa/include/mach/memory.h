@@ -15,7 +15,7 @@
 /*
  * Physical DRAM offset.
  */
-#ifdef  MACH_LOOX720 || MACH_ASUSP525
+#if defined(MACH_LOOX720) || defined(MACH_ASUSP525)
 #define PHYS_OFFSET	UL(0xa8000000)
 
 /*
