@@ -40,7 +40,7 @@
 
 #include <mach/pxa2xx-regs.h>
 #include <mach/pxa2xx_spi.h>
-#include <mach/regs-ssp.h>
+#include <plat/ssp.h>
 #include <mach/camera.h>
 #include <mach/udc.h>
 #include <mach/audio.h>
@@ -923,7 +923,7 @@ static void __init loox720_fixup(struct machine_desc *desc,
 {
 	mi->nr_banks = 1;
 	mi->bank[0].start = 0xa8000000;
-	mi->bank[0].node = 0;
+	//mi->bank[0].node = 0;
 	mi->bank[0].size = (128 * 1024 * 1024);
 }
 
