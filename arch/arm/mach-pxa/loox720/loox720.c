@@ -40,7 +40,7 @@
 
 #include <mach/pxa2xx-regs.h>
 #include <mach/pxa2xx_spi.h>
-#include <mach/regs-ssp.h>
+#include <plat/ssp.h>
 #include <mach/camera.h>
 #include <mach/udc.h>
 #include <mach/audio.h>
