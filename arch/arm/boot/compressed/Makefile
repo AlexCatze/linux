@@ -20,10 +20,6 @@ ifeq ($(CONFIG_ARCH_SHARK),y)
 OBJS		+= head-shark.o ofw-shark.o
 endif
 
-ifeq ($(CONFIG_ARCH_L7200),y)
-OBJS		+= head-l7200.o
-endif
-
 ifeq ($(CONFIG_ARCH_P720T),y)
 # Borrow this code from SA1100
 OBJS		+= head-sa1100.o
@@ -37,7 +33,7 @@ ifeq ($(CONFIG_CPU_XSCALE),y)
 OBJS		+= head-xscale.o
 endif
 
-ifeq ($(CONFIG_PXA_SHARPSL),y)
+ifeq ($(CONFIG_PXA_SHARPSL_DETECT_MACH_ID),y)
 OBJS		+= head-sharpsl.o
 endif
 
@@ -66,10 +62,14 @@ SEDFLAGS	= s/TEXT_START/$(ZTEXTADDR)/;s/BSS_START/$(ZBSSADDR)/
 
 suffix_$(CONFIG_KERNEL_GZIP) = gzip
 suffix_$(CONFIG_KERNEL_LZO)  = lzo
+suffix_$(CONFIG_KERNEL_LZMA) = lzma
 
 targets       := vmlinux vmlinux.lds \
 		 piggy.$(suffix_y) piggy.$(suffix_y).o \
 		 font.o font.c head.o misc.o $(OBJS)
+
+# Make sure files are removed during clean
+extra-y       += piggy.gzip piggy.lzo piggy.lzma lib1funcs.S
 
 ifeq ($(CONFIG_FUNCTION_TRACER),y)
 ORIG_CFLAGS := $(KBUILD_CFLAGS)
@@ -85,12 +85,6 @@ LDFLAGS_vmlinux := --defsym zreladdr=$(ZRELADDR)
 endif
 ifeq ($(CONFIG_CPU_ENDIAN_BE8),y)
 LDFLAGS_vmlinux += --be8
-endif
-ifneq ($(INITRD_PHYS),)
-LDFLAGS_vmlinux += --defsym initrd_phys=$(INITRD_PHYS)
-endif
-ifneq ($(PARAMS_PHYS),)
-LDFLAGS_vmlinux += --defsym params_phys=$(PARAMS_PHYS)
 endif
 # ?
 LDFLAGS_vmlinux += -p
@@ -122,5 +116,5 @@ CFLAGS_font.o := -Dstatic=
 $(obj)/font.c: $(FONTC)
 	$(call cmd,shipped)
 
-$(obj)/vmlinux.lds: $(obj)/vmlinux.lds.in arch/arm/boot/Makefile .config
+$(obj)/vmlinux.lds: $(obj)/vmlinux.lds.in arch/arm/boot/Makefile $(KCONFIG_CONFIG)
 	@sed "$(SEDFLAGS)" < $< > $@
