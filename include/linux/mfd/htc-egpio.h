@@ -35,6 +35,7 @@ struct htc_egpio_chip {
  * @bus_width: alignment of the registers, either 16 or 32 bit
  * @invert_acks: set if chip requires writing '0' to ack an irq, instead of '1'
  * @ack_register: location of the irq/ack register
+ * @irq_register: location of the irq enablement register
  * @chip: pointer to array of htc_egpio_chip descriptors
  * @num_chips: number of egpio chip descriptors
  */
@@ -46,6 +47,7 @@ struct htc_egpio_platform_data {
 	int                   num_irqs;
 	int                   invert_acks;
 	int                   ack_register;
+	int		      irq_register;
 
 	struct htc_egpio_chip *chip;
 	int                   num_chips;

@@ -1,0 +1,43 @@
+menu "Fujitsu-Siemens PocketLoox 720 configuration"
+    depends on MACH_LOOX720
+
+config LOOX720_PCMCIA
+    tristate 'FSC Loox 720 CF/PC Card'
+    depends on MACH_LOOX720 
+    select PCCARD
+    select PCMCIA_PXA2XX
+    default m
+    help
+        Enable CF/PC Card controller in Loox 720. This must be set to Y if you
+        want to boot from CF card, but this also turns WiFi chip on.
+
+config LOOX720_FLASH
+    tristate "FSC Loox 720 Flash ROM"
+    select MTD
+    select MTD_CFI
+    select MTD_PARTITIONS
+    select MTD_CFI_INTELEXT
+    select MTD_PXA2XX
+    depends on MACH_LOOX720
+    help
+        FSC Loox 720 internal flash ROM support.
+
+config DRAM_BASE
+    hex '(S)DRAM Base Address'
+    depends on MACH_LOOX720
+    default 0xa8000000
+    help
+        On the Loox 720, RAM starts at 0xa8000000. But if you use
+        Haret prior to 0.4.9, set this to 0xaa000000, ot loox won't
+        boot. Also you will have to change DRAM Size value.
+
+config DRAM_SIZE
+    hex '(S)DRAM Size'
+    depends on MACH_LOOX720
+    default 0x8000000
+    help
+        The loox has 128 MB memory. If you use Haret prior to 0.4.9,
+        set this to 0x6000000, or loox won't boot.
+        Also you will have to change DRAM Base Address value.
+
+endmenu
