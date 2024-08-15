@@ -170,6 +170,7 @@ not_angel:
 
 		.text
 		adr	r0, LC0
+
 		ldmia	r0, {r1, r2, r3, r5, r6, r11, ip}
 		ldr	sp, [r0, #28]
 #ifdef CONFIG_AUTO_ZRELADDR
