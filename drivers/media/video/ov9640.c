@@ -608,7 +608,7 @@ static int ov9640_try_fmt(struct v4l2_subdev *sd,
 		break;
 	default:
 		mf->code = V4L2_MBUS_FMT_UYVY8_2X8;
-	case V4L2_MBUS_FMT_UYVY8_2X8:0
+	case V4L2_MBUS_FMT_UYVY8_2X8:
 		mf->colorspace = V4L2_COLORSPACE_JPEG;
 	}
 
