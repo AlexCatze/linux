@@ -898,6 +898,12 @@ void __init reserve_node_zero(pg_data_t *pgdat)
 		reserve_bootmem_node(pgdat, 0xa0200000, 0x1000,
 				BOOTMEM_EXCLUSIVE);
 
+    if (machine_is_asusp525()) {
+		reserve_bootmem_node(pgdat, 0xa0008000, 0x4000,
+				BOOTMEM_EXCLUSIVE);
+		reserve_bootmem_node(pgdat, 0xa0000000, 0x1000,
+		        BOOTMEM_EXCLUSIVE);
+	}
 	/*
 	 * U300 - This platform family can share physical memory
 	 * between two ARM cpus, one running Linux and the other

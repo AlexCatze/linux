@@ -160,7 +160,7 @@ static pxa_freqs_t pxa27x_freqs[] = {
 	{312000, 208000, PXA27x_CCCR(1, 16, 3), 1, CCLKCFG2(1, 0, 1), 1250000, 1705000 },
 	{416000, 208000, PXA27x_CCCR(1, 16, 4), 1, CCLKCFG2(1, 0, 1), 1350000, 1705000 },
 	{520000, 208000, PXA27x_CCCR(1, 16, 5), 1, CCLKCFG2(1, 0, 1), 1450000, 1705000 },
-	{624000, 208000, PXA27x_CCCR(1, 16, 6), 1, CCLKCFG2(1, 0, 1), 1550000, 1705000 }
+//	{624000, 208000, PXA27x_CCCR(1, 16, 6), 1, CCLKCFG2(1, 0, 1), 1550000, 1705000 }
 };
 
 #define NUM_PXA27x_FREQS ARRAY_SIZE(pxa27x_freqs)
@@ -256,13 +256,9 @@ static void init_sdram_rows(void)
 
 static u32 mdrefr_dri(unsigned int freq)
 {
-	u32 dri = 0;
+	u32 interval = freq * SDRAM_TREF / sdram_rows;
 
-	if (cpu_is_pxa25x())
-		dri = ((freq * SDRAM_TREF) / (sdram_rows * 32));
-	if (cpu_is_pxa27x())
-		dri = ((freq * SDRAM_TREF) / (sdram_rows - 31)) / 32;
-	return dri;
+	return (interval - (cpu_is_pxa27x() ? 31 : 0)) / 32;
 }
 
 /* find a valid frequency point */
