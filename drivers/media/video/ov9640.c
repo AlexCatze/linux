@@ -155,6 +155,7 @@ static const struct ov9640_reg ov9640_regs_rgb[] = {
 };
 
 static enum v4l2_mbus_pixelcode ov9640_codes[] = {
+
 	V4L2_MBUS_FMT_UYVY8_2X8,
 	V4L2_MBUS_FMT_RGB555_2X8_PADHI_LE,
 	V4L2_MBUS_FMT_RGB565_2X8_LE,
@@ -607,7 +608,7 @@ static int ov9640_try_fmt(struct v4l2_subdev *sd,
 		break;
 	default:
 		mf->code = V4L2_MBUS_FMT_UYVY8_2X8;
-	case V4L2_MBUS_FMT_UYVY8_2X8:
+	case V4L2_MBUS_FMT_UYVY8_2X8:0
 		mf->colorspace = V4L2_COLORSPACE_JPEG;
 	}
 
