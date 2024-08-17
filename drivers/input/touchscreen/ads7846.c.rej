@@ -1,0 +1,34 @@
+--- drivers/input/touchscreen/ads7846.c
++++ drivers/input/touchscreen/ads7846.c
+@@ -1167,18 +1173,21 @@
+ 
+ 	ts->last_msg = m;
+ 
++#ifdef	CONFIG_REGULATOR
+ 	ts->reg = regulator_get(&spi->dev, "vcc");
+-	if (IS_ERR(ts->reg)) {
+-		err = PTR_ERR(ts->reg);
+-		dev_err(&spi->dev, "unable to get regulator: %d\n", err);
+-		goto err_free_gpio;
+-	}
+-
+-	err = regulator_enable(ts->reg);
+-	if (err) {
+-		dev_err(&spi->dev, "unable to enable regulator: %d\n", err);
+-		goto err_put_regulator;
++	if (IS_ERR(ts->reg))
++		ts->reg = NULL;
++	else {
++		err = regulator_enable(ts->reg);
++		if (err) {
++			dev_err(&spi->dev, "unable to enable regulator: %d\n",
++				err);
++			goto err_put_regulator;
++		}
+ 	}
++#else
++	ts->reg = NULL;
++#endif
+ 
+ 	if (request_irq(spi->irq, ads7846_irq, IRQF_TRIGGER_FALLING,
+ 			spi->dev.driver->name, ts)) {
