@@ -1615,7 +1615,6 @@ config ZRELADDR
 	  image will be placed. ZRELADDR has to be specified when the
 	  assumption of AUTO_ZRELADDR is not valid, or when ZBOOT_ROM is
 	  selected.
-
 endmenu
 
 menu "CPU Power Management"
