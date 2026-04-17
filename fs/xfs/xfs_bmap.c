@@ -41,7 +41,6 @@
 #include "xfs_rtalloc.h"
 #include "xfs_error.h"
 #include "xfs_attr_leaf.h"
-#include "xfs_rw.h"
 #include "xfs_quota.h"
 #include "xfs_trans_space.h"
 #include "xfs_buf_item.h"
@@ -2438,6 +2437,7 @@ xfs_bmap_btalloc(
 	 * Normal allocation, done through xfs_alloc_vextent.
 	 */
 	tryagain = isaligned = 0;
+	memset(&args, 0, sizeof(args));
 	args.tp = ap->tp;
 	args.mp = mp;
 	args.fsbno = ap->blkno;
@@ -3083,6 +3083,7 @@ xfs_bmap_extents_to_btree(
 	 * Convert to a btree with two levels, one record in root.
 	 */
 	XFS_IFORK_FMT_SET(ip, whichfork, XFS_DINODE_FMT_BTREE);
+	memset(&args, 0, sizeof(args));
 	args.tp = tp;
 	args.mp = mp;
 	args.firstblock = *firstblock;
@@ -3238,6 +3239,7 @@ xfs_bmap_local_to_extents(
 		xfs_buf_t	*bp;	/* buffer for extent block */
 		xfs_bmbt_rec_host_t *ep;/* extent record pointer */
 
+		memset(&args, 0, sizeof(args));
 		args.tp = tp;
 		args.mp = ip->i_mount;
 		args.firstblock = *firstblock;
@@ -4527,7 +4529,7 @@ out_unreserve_blocks:
 		xfs_icsb_modify_counters(mp, XFS_SBS_FDBLOCKS, alen, 0);
 out_unreserve_quota:
 	if (XFS_IS_QUOTA_ON(mp))
-		xfs_trans_unreserve_quota_nblks(NULL, ip, alen, 0, rt ?
+		xfs_trans_unreserve_quota_nblks(NULL, ip, (long)alen, 0, rt ?
 				XFS_QMOPT_RES_RTBLKS : XFS_QMOPT_RES_REGBLKS);
 	return error;
 }
@@ -4617,12 +4619,11 @@ xfs_bmapi_delay(
 
 
 STATIC int
-xfs_bmapi_allocate(
-	struct xfs_bmalloca	*bma,
-	int			flags)
+__xfs_bmapi_allocate(
+	struct xfs_bmalloca	*bma)
 {
 	struct xfs_mount	*mp = bma->ip->i_mount;
-	int			whichfork = (flags & XFS_BMAPI_ATTRFORK) ?
+	int			whichfork = (bma->flags & XFS_BMAPI_ATTRFORK) ?
 						XFS_ATTR_FORK : XFS_DATA_FORK;
 	struct xfs_ifork	*ifp = XFS_IFORK_PTR(bma->ip, whichfork);
 	int			tmp_logflags = 0;
@@ -4655,23 +4656,26 @@ xfs_bmapi_allocate(
 	 * Indicate if this is the first user data in the file, or just any
 	 * user data.
 	 */
-	if (!(flags & XFS_BMAPI_METADATA)) {
+	if (!(bma->flags & XFS_BMAPI_METADATA)) {
 		bma->userdata = (bma->offset == 0) ?
 			XFS_ALLOC_INITIAL_USER_DATA : XFS_ALLOC_USERDATA;
 	}
 
-	bma->minlen = (flags & XFS_BMAPI_CONTIG) ? bma->length : 1;
+	bma->minlen = (bma->flags & XFS_BMAPI_CONTIG) ? bma->length : 1;
 
 	/*
 	 * Only want to do the alignment at the eof if it is userdata and
 	 * allocation length is larger than a stripe unit.
 	 */
 	if (mp->m_dalign && bma->length >= mp->m_dalign &&
-	    !(flags & XFS_BMAPI_METADATA) && whichfork == XFS_DATA_FORK) {
+	    !(bma->flags & XFS_BMAPI_METADATA) && whichfork == XFS_DATA_FORK) {
 		error = xfs_bmap_isaeof(bma, whichfork);
 		if (error)
 			return error;
 	}
+
+	if (bma->flags & XFS_BMAPI_STACK_SWITCH)
+		bma->stack_switch = 1;
 
 	error = xfs_bmap_alloc(bma);
 	if (error)
@@ -4707,7 +4711,7 @@ xfs_bmapi_allocate(
 	 * A wasdelay extent has been initialized, so shouldn't be flagged
 	 * as unwritten.
 	 */
-	if (!bma->wasdel && (flags & XFS_BMAPI_PREALLOC) &&
+	if (!bma->wasdel && (bma->flags & XFS_BMAPI_PREALLOC) &&
 	    xfs_sb_version_hasextflgbit(&mp->m_sb))
 		bma->got.br_state = XFS_EXT_UNWRITTEN;
 
@@ -4733,6 +4737,45 @@ xfs_bmapi_allocate(
 	ASSERT(bma->got.br_state == XFS_EXT_NORM ||
 	       bma->got.br_state == XFS_EXT_UNWRITTEN);
 	return 0;
+}
+
+static void
+xfs_bmapi_allocate_worker(
+	struct work_struct	*work)
+{
+	struct xfs_bmalloca	*args = container_of(work,
+						struct xfs_bmalloca, work);
+	unsigned long		pflags;
+
+	/* we are in a transaction context here */
+	current_set_flags_nested(&pflags, PF_FSTRANS);
+
+	args->result = __xfs_bmapi_allocate(args);
+	complete(args->done);
+
+	current_restore_flags_nested(&pflags, PF_FSTRANS);
+}
+
+/*
+ * Some allocation requests often come in with little stack to work on. Push
+ * them off to a worker thread so there is lots of stack to use. Otherwise just
+ * call directly to avoid the context switch overhead here.
+ */
+int
+xfs_bmapi_allocate(
+	struct xfs_bmalloca	*args)
+{
+	DECLARE_COMPLETION_ONSTACK(done);
+
+	if (!args->stack_switch)
+		return __xfs_bmapi_allocate(args);
+
+
+	args->done = &done;
+	INIT_WORK_ONSTACK(&args->work, xfs_bmapi_allocate_worker);
+	queue_work(xfs_alloc_wq, &args->work);
+	wait_for_completion(&done);
+	return args->result;
 }
 
 STATIC int
@@ -4920,6 +4963,7 @@ xfs_bmapi_write(
 			bma.conv = !!(flags & XFS_BMAPI_CONVERT);
 			bma.wasdel = wasdelay;
 			bma.offset = bno;
+			bma.flags = flags;
 
 			/*
 			 * There's a 32/64 bit type mismatch between the
@@ -4935,7 +4979,7 @@ xfs_bmapi_write(
 
 			ASSERT(len > 0);
 			ASSERT(bma.length > 0);
-			error = xfs_bmapi_allocate(&bma, flags);
+			error = xfs_bmapi_allocate(&bma);
 			if (error)
 				goto error0;
 			if (bma.blkno == NULLFSBLOCK)
@@ -5518,7 +5562,7 @@ xfs_getbmap(
 		if (xfs_get_extsz_hint(ip) ||
 		    ip->i_d.di_flags & (XFS_DIFLAG_PREALLOC|XFS_DIFLAG_APPEND)){
 			prealloced = 1;
-			fixlen = XFS_MAXIOFFSET(mp);
+			fixlen = mp->m_super->s_maxbytes;
 		} else {
 			prealloced = 0;
 			fixlen = XFS_ISIZE(ip);
@@ -5621,8 +5665,20 @@ xfs_getbmap(
 				XFS_FSB_TO_BB(mp, map[i].br_blockcount);
 			out[cur_ext].bmv_unused1 = 0;
 			out[cur_ext].bmv_unused2 = 0;
-			ASSERT(((iflags & BMV_IF_DELALLOC) != 0) ||
-			      (map[i].br_startblock != DELAYSTARTBLOCK));
+
+			/*
+			 * delayed allocation extents that start beyond EOF can
+			 * occur due to speculative EOF allocation when the
+			 * delalloc extent is larger than the largest freespace
+			 * extent at conversion time. These extents cannot be
+			 * converted by data writeback, so can exist here even
+			 * if we are not supposed to be finding delalloc
+			 * extents.
+			 */
+			if (map[i].br_startblock == DELAYSTARTBLOCK &&
+			    map[i].br_startoff <= XFS_B_TO_FSB(mp, XFS_ISIZE(ip)))
+				ASSERT((iflags & BMV_IF_DELALLOC) != 0);
+
                         if (map[i].br_startblock == HOLESTARTBLOCK &&
 			    whichfork == XFS_ATTR_FORK) {
 				/* came to the end of attribute fork */
@@ -6156,4 +6212,17 @@ next_block:
 	} while(remaining > 0);
 
 	return error;
+}
+
+/*
+ * Convert the given file system block to a disk block.  We have to treat it
+ * differently based on whether the file is a real time file or not, because the
+ * bmap code does.
+ */
+xfs_daddr_t
+xfs_fsb_to_db(struct xfs_inode *ip, xfs_fsblock_t fsb)
+{
+	return (XFS_IS_REALTIME_INODE(ip) ? \
+		 (xfs_daddr_t)XFS_FSB_TO_BB((ip)->i_mount, (fsb)) : \
+		 XFS_FSB_TO_DADDR((ip)->i_mount, (fsb)));
 }

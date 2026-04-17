@@ -24,16 +24,6 @@
 #include <asm/homecache.h>
 #include <arch/opcode.h>
 
-#ifdef __tilegx__
-# define Elf_Rela Elf64_Rela
-# define ELF_R_SYM ELF64_R_SYM
-# define ELF_R_TYPE ELF64_R_TYPE
-#else
-# define Elf_Rela Elf32_Rela
-# define ELF_R_SYM ELF32_R_SYM
-# define ELF_R_TYPE ELF32_R_TYPE
-#endif
-
 #ifdef MODULE_DEBUG
 #define DEBUGP printk
 #else
@@ -159,7 +149,17 @@ int apply_relocate_add(Elf_Shdr *sechdrs,
 
 		switch (ELF_R_TYPE(rel[i].r_info)) {
 
-#define MUNGE(func) (*location = ((*location & ~func(-1)) | func(value)))
+#ifdef __LITTLE_ENDIAN
+# define MUNGE(func) \
+	(*location = ((*location & ~func(-1)) | func(value)))
+#else
+/*
+ * Instructions are always little-endian, so when we read them as data,
+ * we have to swap them around before and after modifying them.
+ */
+# define MUNGE(func) \
+	(*location = swab64((swab64(*location) & ~func(-1)) | func(value)))
+#endif
 
 #ifndef __tilegx__
 		case R_TILE_32:

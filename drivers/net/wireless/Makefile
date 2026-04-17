@@ -6,6 +6,7 @@ obj-$(CONFIG_IPW2100) += ipw2x00/
 obj-$(CONFIG_IPW2200) += ipw2x00/
 
 obj-$(CONFIG_HERMES)		+= orinoco/
+obj-$(CONFIG_ACX_MAC80211)      += acx/
 
 obj-$(CONFIG_AIRO)		+= airo.o
 obj-$(CONFIG_AIRO_CS)		+= airo_cs.o airo.o
@@ -51,11 +52,7 @@ obj-$(CONFIG_ATH_COMMON)	+= ath/
 
 obj-$(CONFIG_MAC80211_HWSIM)	+= mac80211_hwsim.o
 
-obj-$(CONFIG_WL1251)	+= wl1251/
-obj-$(CONFIG_WL12XX)	+= wl12xx/
-obj-$(CONFIG_WL12XX_PLATFORM_DATA)	+= wl12xx/
-
-obj-$(CONFIG_IWM)	+= iwmc3200wifi/
+obj-$(CONFIG_WL_TI)	+= ti/
 
 obj-$(CONFIG_MWIFIEX)	+= mwifiex/
 

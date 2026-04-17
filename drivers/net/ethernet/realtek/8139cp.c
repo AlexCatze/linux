@@ -563,7 +563,7 @@ rx_next:
 		if (cpr16(IntrStatus) & cp_rx_intr_mask)
 			goto rx_status_loop;
 
-		napi_gro_flush(napi);
+		napi_gro_flush(napi, false);
 		spin_lock_irqsave(&cp->lock, flags);
 		__napi_complete(napi);
 		cpw16_f(IntrMask, cp_intr_mask);
@@ -635,9 +635,12 @@ static irqreturn_t cp_interrupt (int irq, void *dev_instance)
  */
 static void cp_poll_controller(struct net_device *dev)
 {
-	disable_irq(dev->irq);
-	cp_interrupt(dev->irq, dev);
-	enable_irq(dev->irq);
+	struct cp_private *cp = netdev_priv(dev);
+	const int irq = cp->pdev->irq;
+
+	disable_irq(irq);
+	cp_interrupt(irq, dev);
+	enable_irq(irq);
 }
 #endif
 
@@ -1057,17 +1060,22 @@ static int cp_init_rings (struct cp_private *cp)
 
 static int cp_alloc_rings (struct cp_private *cp)
 {
+	struct device *d = &cp->pdev->dev;
 	void *mem;
+	int rc;
 
-	mem = dma_alloc_coherent(&cp->pdev->dev, CP_RING_BYTES,
-				 &cp->ring_dma, GFP_KERNEL);
+	mem = dma_alloc_coherent(d, CP_RING_BYTES, &cp->ring_dma, GFP_KERNEL);
 	if (!mem)
 		return -ENOMEM;
 
 	cp->rx_ring = mem;
 	cp->tx_ring = &cp->rx_ring[CP_RX_RING_SIZE];
 
-	return cp_init_rings(cp);
+	rc = cp_init_rings(cp);
+	if (rc < 0)
+		dma_free_coherent(d, CP_RING_BYTES, cp->rx_ring, cp->ring_dma);
+
+	return rc;
 }
 
 static void cp_clean_rings (struct cp_private *cp)
@@ -1117,6 +1125,7 @@ static void cp_free_rings (struct cp_private *cp)
 static int cp_open (struct net_device *dev)
 {
 	struct cp_private *cp = netdev_priv(dev);
+	const int irq = cp->pdev->irq;
 	int rc;
 
 	netif_dbg(cp, ifup, dev, "enabling interface\n");
@@ -1129,7 +1138,7 @@ static int cp_open (struct net_device *dev)
 
 	cp_init_hw(cp);
 
-	rc = request_irq(dev->irq, cp_interrupt, IRQF_SHARED, dev->name, dev);
+	rc = request_irq(irq, cp_interrupt, IRQF_SHARED, dev->name, dev);
 	if (rc)
 		goto err_out_hw;
 
@@ -1166,7 +1175,7 @@ static int cp_close (struct net_device *dev)
 
 	spin_unlock_irqrestore(&cp->lock, flags);
 
-	free_irq(dev->irq, dev);
+	free_irq(cp->pdev->irq, dev);
 
 	cp_free_rings(cp);
 	return 0;
@@ -1632,7 +1641,7 @@ static void eeprom_cmd(void __iomem *ee_addr, int cmd, int cmd_len)
 
 static void eeprom_cmd_end(void __iomem *ee_addr)
 {
-	writeb (~EE_CS, ee_addr);
+	writeb(0, ee_addr);
 	eeprom_delay ();
 }
 
@@ -1914,7 +1923,6 @@ static int cp_init_one (struct pci_dev *pdev, const struct pci_device_id *ent)
 		       (unsigned long long)pciaddr);
 		goto err_out_res;
 	}
-	dev->base_addr = (unsigned long) regs;
 	cp->regs = regs;
 
 	cp_stop_hw(cp);
@@ -1942,14 +1950,12 @@ static int cp_init_one (struct pci_dev *pdev, const struct pci_device_id *ent)
 	dev->vlan_features = NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_TSO |
 		NETIF_F_HIGHDMA;
 
-	dev->irq = pdev->irq;
-
 	rc = register_netdev(dev);
 	if (rc)
 		goto err_out_iomap;
 
-	netdev_info(dev, "RTL-8139C+ at 0x%lx, %pM, IRQ %d\n",
-		    dev->base_addr, dev->dev_addr, dev->irq);
+	netdev_info(dev, "RTL-8139C+ at 0x%p, %pM, IRQ %d\n",
+		    regs, dev->dev_addr, pdev->irq);
 
 	pci_set_drvdata(pdev, dev);
 

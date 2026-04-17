@@ -672,7 +672,8 @@ int twl4030_sih_setup(struct device *dev, int module, int irq_base)
 	irq = sih_mod + twl4030_irq_base;
 	irq_set_handler_data(irq, agent);
 	agent->irq_name = kasprintf(GFP_KERNEL, "twl4030_%s", sih->name);
-	status = request_threaded_irq(irq, NULL, handle_twl4030_sih, 0,
+	status = request_threaded_irq(irq, NULL, handle_twl4030_sih,
+				      IRQF_EARLY_RESUME,
 				      agent->irq_name ?: sih->name, NULL);
 
 	dev_info(dev, "%s (irq %d) chaining IRQs %d..%d\n", sih->name,
@@ -757,6 +758,7 @@ int twl4030_init_irq(struct device *dev, int irq_num)
 		dev_err(dev, "could not claim irq%d: %d\n", irq_num, status);
 		goto fail_rqirq;
 	}
+	enable_irq_wake(irq_num);
 
 	return irq_base;
 fail_rqirq:

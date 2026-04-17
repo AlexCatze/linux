@@ -42,7 +42,9 @@
 #define TASK_SIZE_OF(tsk) \
 	(test_tsk_thread_flag(tsk,TIF_32BIT) ? \
 	 (1UL << 32UL) : ((unsigned long)-VPTE_SIZE))
-#define TASK_SIZE	TASK_SIZE_OF(current)
+#define TASK_SIZE \
+	(test_thread_flag(TIF_32BIT) ? \
+	 (1UL << 32UL) : ((unsigned long)-VPTE_SIZE))
 #ifdef __KERNEL__
 
 #define STACK_TOP32	((1UL << 32UL) - PAGE_SIZE)
@@ -186,9 +188,6 @@ do { \
 /* Free all resources held by a thread. */
 #define release_thread(tsk)		do { } while (0)
 
-/* Prepare to copy thread state - unlazy all lazy status */
-#define prepare_to_copy(tsk)	do { } while (0)
-
 extern pid_t kernel_thread(int (*fn)(void *), void * arg, unsigned long flags);
 
 extern unsigned long get_wchan(struct task_struct *task);
@@ -197,7 +196,22 @@ extern unsigned long get_wchan(struct task_struct *task);
 #define KSTK_EIP(tsk)  (task_pt_regs(tsk)->tpc)
 #define KSTK_ESP(tsk)  (task_pt_regs(tsk)->u_regs[UREG_FP])
 
-#define cpu_relax()	barrier()
+/* Please see the commentary in asm/backoff.h for a description of
+ * what these instructions are doing and how they have been choosen.
+ * To make a long story short, we are trying to yield the current cpu
+ * strand during busy loops.
+ */
+#define cpu_relax()	asm volatile("\n99:\n\t"			\
+				     "rd	%%ccr, %%g0\n\t"	\
+				     "rd	%%ccr, %%g0\n\t"	\
+				     "rd	%%ccr, %%g0\n\t"	\
+				     ".section	.pause_3insn_patch,\"ax\"\n\t"\
+				     ".word	99b\n\t"		\
+				     "wr	%%g0, 128, %%asr27\n\t"	\
+				     "nop\n\t"				\
+				     "nop\n\t"				\
+				     ".previous"			\
+				     ::: "memory")
 
 /* Prefetch support.  This is tuned for UltraSPARC-III and later.
  * UltraSPARC-I will treat these as nops, and UltraSPARC-II has

@@ -1,0 +1,46 @@
+name: Dev Build
+
+on:
+  push:
+    branches:
+      - v3.7-PocketPC
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Apt Update
+      run: sudo apt update
+
+    - name: Setup Requirements
+      run: sudo apt install -y wget binutils
+
+    - name: Get compiler
+      run: wget https://launchpad.net/gcc-arm-embedded/4.8/4.8-2014-q2-update/+download/gcc-arm-none-eabi-4_8-2014q2-20140609-linux.tar.bz2
+
+    - name: Setup compiler
+      run: sudo tar -xf gcc-arm-none-eabi-4_8-2014q2-20140609-linux.tar.bz2 -C ./
+
+    - name: Create output directory
+      run: mkdir output
+
+    - uses: ./.github/actions/buildplatform
+      with:
+        codename: hx4700
+
+    - uses: ./.github/actions/buildplatform
+      with:
+        codename: qemu
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: dev-${{ github.sha }}
+        prerelease: true
+        name: Dev build ${{ github.sha }}
+        files: |
+          output/*
+

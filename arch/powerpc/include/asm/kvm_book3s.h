@@ -59,7 +59,7 @@ struct hpte_cache {
 	struct hlist_node list_vpte;
 	struct hlist_node list_vpte_long;
 	struct rcu_head rcu_head;
-	u64 host_va;
+	u64 host_vpn;
 	u64 pfn;
 	ulong slot;
 	struct kvmppc_pte pte;
@@ -452,5 +452,8 @@ static inline bool kvmppc_critical_section(struct kvm_vcpu *vcpu)
 #define OSI_SC_MAGIC_R4			0x77810F9B
 
 #define INS_DCBZ			0x7c0007ec
+
+/* LPIDs we support with this build -- runtime limit may be lower */
+#define KVMPPC_NR_LPIDS			(LPID_RSVD + 1)
 
 #endif /* __ASM_KVM_BOOK3S_H__ */

@@ -1,0 +1,44 @@
+name: Build Platform
+inputs:
+  codename:
+    description: “Platform codename”
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+  - name: make ${{inputs.codename}}_defconfig
+    run: make ${{inputs.codename}}_defconfig
+    shell: bash
+    env:
+      CROSS_COMPILE: ./gcc-arm-none-eabi-4_8-2014q2/bin/arm-none-eabi-
+
+  - name: make zImage
+    run: make zImage -j2
+    shell: bash
+    env:
+      CROSS_COMPILE: ./gcc-arm-none-eabi-4_8-2014q2/bin/arm-none-eabi-
+
+  - name: make modules
+    run: make modules -j2
+    shell: bash
+    env:
+      CROSS_COMPILE: ./gcc-arm-none-eabi-4_8-2014q2/bin/arm-none-eabi-
+
+  - name: make modules_install
+    run: make INSTALL_MOD_PATH=./modules -j2 modules_install
+    shell: bash
+    env:
+      CROSS_COMPILE: ./gcc-arm-none-eabi-4_8-2014q2/bin/arm-none-eabi-
+
+  - name: Pack modules to tar
+    run: sudo tar --create --ignore-failed-read --preserve-permissions --recursion --sparse --totals --wildcards --gzip --file=modules.tar.gz ./modules/*
+    shell: bash
+
+  - name: Move kernel and modules to output
+    run: mv ./arch/arm/boot/zImage ./output/${{inputs.codename}}-zImage; mv modules.tar.gz ./output/${{inputs.codename}}-modules.tar.gz;
+    shell: bash
+
+  - name: Clean
+    run: rm -r ./modules
+    shell: bash
