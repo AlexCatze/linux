@@ -829,16 +829,16 @@ static int __init asic3_mfd_probe(struct platform_device *pdev,
 	asic3_mmc_resources[0].end   >>= asic->bus_shift;
 
 ret = mfd_add_devices(&pdev->dev, pdev->id,
-			&asic3_cell_mmc, 1, mem_sdio, irq);
+			&asic3_cell_mmc, 1, mem_sdio, irq, NULL);
 
 //	ret = mfd_add_devices(&pdev->dev, pdev->id,
-//			&asic3_cell_ds1wm, 1, mem, asic->irq_base);
+//			&asic3_cell_ds1wm, 1, mem, asic->irq_base, NULL);
 //	if (ret < 0)
 //		goto out;
 
 	if (mem_sdio && (irq >= 0))
 	  {	ret = mfd_add_devices(&pdev->dev, pdev->id,
-			&asic3_cell_mmc, 1, mem_sdio, irq);
+			&asic3_cell_mmc, 1, mem_sdio, irq, NULL);
           printk("W228x:pass %d",asic->bus_shift);
           }
  out:

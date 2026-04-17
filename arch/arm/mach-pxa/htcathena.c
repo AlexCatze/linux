@@ -45,11 +45,11 @@
 #include <mach/pxa_rfkill.h>
 #include <mach/udc.h>
 
-#include <mach/mmc.h>
-#include <mach/ohci.h>
+#include <linux/platform_data/mmc-pxamci.h>
+#include <linux/platform_data/usb-ohci-pxa27x.h>
 #include <mach/htcathena.h>
 
-#include <mach/camera.h>
+#include <linux/platform_data/camera-pxa.h>
 #include <media/soc_camera.h>
 #include <media/soc_camera.h>
 #include <media/soc_camera_platform.h>
