@@ -334,7 +334,7 @@ static struct htc_egpio_chip egpio_cpld1_chips[] = {
 	.gpio_base = NR_BUILTIN_GPIO + 8 * 3,
 	.num_gpios = 8,
 	.direction = HTC_EGPIO_OUTPUT,
-	.initial_values = 0x50,  	
+	.initial_values = 0xD0,  	
 	},
 	[4] = {				/* Bank F intput */
 	.reg_start = 5,
@@ -670,13 +670,11 @@ static int athena_backlight_notify(struct device *dev, int brightness)
 {
 	gpio_set_value(EGPIO2_HTCATHENA_BKL_POWER, brightness);
 
-if (brightness >= 200) {
+if (brightness > 0) {
 	gpio_set_value(EGPIO1_D7_HTCATHENA_LCD_BKL, 1);
-	printk(KERN_DEBUG "bk light brightness %d \n", brightness);
-	return brightness - 72;
+	//return brightness - 72;
 	} else {
 	gpio_set_value(EGPIO1_D7_HTCATHENA_LCD_BKL, 0);
-	return brightness;
 	}
 	return brightness;
 }
