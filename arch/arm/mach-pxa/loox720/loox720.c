@@ -40,7 +40,7 @@
 
 #include <mach/pxa2xx-regs.h>
 #include <mach/pxa2xx_spi.h>
-#include <mach/regs-ssp.h>
+#include <plat/ssp.h>
 #include <mach/camera.h>
 #include <mach/udc.h>
 #include <mach/audio.h>
@@ -50,7 +50,7 @@
 #include <mach/pxa27x.h>
 #include <mach/irqs.h>
 #include <mach/pxafb.h>
-#include <mach/pxa27x_keypad.h>
+#include <plat/pxa27x_keypad.h>
 #include <mach/mfp-pxa27x.h>
 #include <plat/i2c.h>
 
@@ -923,13 +923,10 @@ static void __init loox720_fixup(struct machine_desc *desc,
 {
 	mi->nr_banks = 1;
 	mi->bank[0].start = 0xa8000000;
-	mi->bank[0].node = 0;
 	mi->bank[0].size = (128 * 1024 * 1024);
 }
 
 MACHINE_START(LOOX720, "FSC Loox 720")
-	.phys_io = 0x40000000,
-	.io_pg_offst = (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.boot_params = 0xa8000100,
 	.map_io = pxa_map_io,
 	.fixup = loox720_fixup,
