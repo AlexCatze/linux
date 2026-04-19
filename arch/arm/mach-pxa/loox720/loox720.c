@@ -922,8 +922,8 @@ static void __init loox720_fixup(struct machine_desc *desc,
 				struct meminfo *mi)
 {
 	mi->nr_banks = 1;
-	mi->bank[0].start = 0xa8000000;
-	mi->bank[0].size = (128 * 1024 * 1024);
+	mi->bank[0].start = CONFIG_DRAM_BASE;
+	mi->bank[0].size = CONFIG_DRAM_SIZE;
 }
 
 MACHINE_START(LOOX720, "FSC Loox 720")
