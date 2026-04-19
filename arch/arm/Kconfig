@@ -1659,7 +1659,6 @@ config AUTO_ZRELADDR
 	  will be determined at run-time by masking the current IP with
 	  0xf8000000. This assumes the zImage being placed in the first 128MB
 	  from start of memory.
-
 endmenu
 
 menu "CPU Power Management"

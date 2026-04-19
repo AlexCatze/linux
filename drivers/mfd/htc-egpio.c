@@ -19,6 +19,8 @@
 #include <linux/module.h>
 #include <linux/mfd/htc-egpio.h>
 
+#define DEBUG
+
 struct egpio_chip {
 	int              reg_start;
 	int              cached_values;
@@ -39,6 +41,7 @@ struct egpio_info {
 	/* irq info */
 	int               ack_register;
 	int               ack_write;
+	int		  irq_register;
 	u16               irqs_enabled;
 	uint              irq_start;
 	int               nirqs;
@@ -82,12 +85,16 @@ static void egpio_mask(unsigned int irq)
 	struct egpio_info *ei = get_irq_chip_data(irq);
 	ei->irqs_enabled &= ~(1 << (irq - ei->irq_start));
 	pr_debug("EGPIO mask %d %04x\n", irq, ei->irqs_enabled);
+//	if (ei->irq_register)
+//		egpio_writew(ei->irqs_enabled, ei, ei->irq_register);
 }
 static void egpio_unmask(unsigned int irq)
 {
 	struct egpio_info *ei = get_irq_chip_data(irq);
 	ei->irqs_enabled |= 1 << (irq - ei->irq_start);
 	pr_debug("EGPIO unmask %d %04x\n", irq, ei->irqs_enabled);
+//	if (ei->irq_register)
+//		egpio_writew(ei->irqs_enabled, ei, ei->irq_register);
 }
 
 static struct irq_chip egpio_muxed_chip = {
@@ -337,6 +344,8 @@ static int __init egpio_probe(struct platform_device *pdev)
 	ei->irq_start = pdata->irq_base;
 	ei->nirqs = pdata->num_irqs;
 	ei->ack_register = pdata->ack_register;
+	ei->irq_register = pdata->irq_register;
+	egpio_writew(0x3ff, ei, ei->irq_register);
 
 	if (ei->chained_irq) {
 		/* Setup irq handlers */
