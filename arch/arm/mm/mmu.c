@@ -756,7 +756,7 @@ static void __init sanity_check_meminfo(void)
 	 * In that case all physical RAM is low memory; clear the limit so
 	 * memblock_alloc() uses MEMBLOCK_ALLOC_ANYWHERE (allocate from top). */
 	if (lowmem_limit < PHYS_OFFSET)
-		lowmem_limit = 0;
+		lowmem_limit = MEMBLOCK_ALLOC_ANYWHERE;
 
 	memblock_set_current_limit(lowmem_limit);
 

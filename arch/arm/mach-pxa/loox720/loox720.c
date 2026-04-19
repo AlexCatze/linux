@@ -32,6 +32,8 @@
 #include <linux/regulator/max1586.h>
 #include <linux/pwm_backlight.h>
 
+#include <linux/memblock.h>
+
 #include <asm/mach-types.h>
 #include <asm/setup.h>
 #include <asm/mach/arch.h>
@@ -926,10 +928,16 @@ static void __init loox720_fixup(struct machine_desc *desc,
 	mi->bank[0].size = CONFIG_DRAM_SIZE;
 }
 
+static void __init loox720_reserve(void)
+{
+	memblock_reserve(PHYS_OFFSET, SZ_2M);
+}
+
 MACHINE_START(LOOX720, "FSC Loox 720")
 	.boot_params = 0xa8000100,
 	.map_io = pxa_map_io,
 	.fixup = loox720_fixup,
+	.reserve = loox720_reserve,
 	.init_irq = pxa27x_init_irq,
 	.timer = &pxa_timer,
 	.init_machine = loox720_init,

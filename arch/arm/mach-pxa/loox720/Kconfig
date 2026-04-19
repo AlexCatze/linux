@@ -25,19 +25,21 @@ config LOOX720_FLASH
 config DRAM_BASE
     hex '(S)DRAM Base Address'
     depends on MACH_LOOX720
-    default 0xa8000000
+    default 0xa8200000
     help
-        On the Loox 720, RAM starts at 0xa8000000. But if you use
-        Haret prior to 0.4.9, set this to 0xaa000000, ot loox won't
-        boot. Also you will have to change DRAM Size value.
+        RAM base address passed to the kernel. Skips the first 2MB of
+        physical RAM (0xa8000000-0xa81fffff) used by the WinCE bootloader
+        (HaRET). Required for 2.6.36+ due to the ARM memblock allocator.
+        If you use Haret prior to 0.4.9, set this to 0xaa000000 and
+        change DRAM Size accordingly.
 
 config DRAM_SIZE
     hex '(S)DRAM Size'
     depends on MACH_LOOX720
-    default 0x8000000
+    default 0x7e00000
     help
-        The loox has 128 MB memory. If you use Haret prior to 0.4.9,
-        set this to 0x6000000, or loox won't boot.
-        Also you will have to change DRAM Base Address value.
+        RAM size in bytes. Default is 126MB (128MB minus the 2MB skipped
+        at the start for the WinCE bootloader region). If you use Haret
+        prior to 0.4.9, set this to 0x6000000 and change DRAM Base.
 
 endmenu
