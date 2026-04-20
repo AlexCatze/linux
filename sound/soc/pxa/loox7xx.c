@@ -239,7 +239,6 @@ static int loox720_wm8750_init(struct snd_soc_pcm_runtime *rtd)
 {
 	int err;
 	struct snd_soc_codec *codec = rtd->codec;
-	struct snd_soc_card *card = rtd->card;
 
 	/* Add loox720 specific controls */
 	err = snd_soc_add_controls(codec, wm8750_loox720_controls,
@@ -264,7 +263,7 @@ static int loox720_wm8750_init(struct snd_soc_pcm_runtime *rtd)
 		return err;
 
 	/* Jack detection API stuff */
-	err = snd_soc_jack_new(card, "Headphone Jack",
+	err = snd_soc_jack_new(codec, "Headphone Jack",
 				SND_JACK_HEADPHONE, &hs_jack);
 	if (err)
 		return err;
@@ -296,6 +295,10 @@ int loox_snd_resume_pre(struct platform_device *pdev) {
 static struct snd_soc_dai_link loox720_dai = {
 	.name = "wm8750",
 	.stream_name = "WM8750",
+	.cpu_dai_name = "pxa2xx-i2s",
+	.codec_dai_name = "wm8750-hifi",
+	.platform_name = "pxa-pcm-audio",
+	.codec_name = "wm8750-codec.0-001a",
 	.init = loox720_wm8750_init,
 	.ops = &loox720_ops,
 };
