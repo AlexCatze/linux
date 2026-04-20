@@ -105,6 +105,7 @@
 //Possibly used for port replicator or audio out on the 20-pin connector
 
 #define	LOOX720_CPLD_IRQ_BASE			IRQ_BOARD_START
+#define LOOX720_NR_IRQS				(LOOX720_CPLD_IRQ_BASE + 16)
 #define LOOX720_IRQ_CF_DETECT_N			LOOX720_CPLD_IRQ_BASE + 2
 #define LOOX720_IRQ_CF_READY			LOOX720_CPLD_IRQ_BASE + 4
 #define LOOX720_IRQ_WIFI_READY			LOOX720_CPLD_IRQ_BASE + 5

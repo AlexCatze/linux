@@ -407,15 +407,22 @@ static struct pxamci_platform_data loox7xx_mci_info = {
 static void loox720_lcd_power(int on, struct fb_var_screeninfo *si)
 {
 	if (on) {
-		gpio_direction_output(LOOX720_EGPIO_LCD1, 1);
-		gpio_direction_output(LOOX720_EGPIO_LCD2, 1);
-		gpio_direction_output(LOOX720_EGPIO_LCD3, 1);
-		gpio_direction_output(LOOX720_EGPIO_LCD4, 1);
+		gpio_set_value(LOOX720_EGPIO_LCD1, 1);
+		mdelay(10);
+		gpio_set_value(LOOX720_EGPIO_LCD2, 1);
+		mdelay(10);
+		gpio_set_value(LOOX720_EGPIO_LCD3, 1);
+		mdelay(10);
+		gpio_set_value(LOOX720_EGPIO_LCD4, 1);
+		mdelay(20);
 	} else {
-		gpio_direction_output(LOOX720_EGPIO_LCD2, 0);
-		gpio_direction_output(LOOX720_EGPIO_LCD3, 0);
-		gpio_direction_output(LOOX720_EGPIO_LCD4, 0);
-		gpio_direction_output(LOOX720_EGPIO_LCD1, 0);
+		gpio_set_value(LOOX720_EGPIO_LCD2, 0);
+		mdelay(10);
+		gpio_set_value(LOOX720_EGPIO_LCD3, 0);
+		mdelay(10);
+		gpio_set_value(LOOX720_EGPIO_LCD4, 0);
+		mdelay(10);
+		gpio_set_value(LOOX720_EGPIO_LCD1, 0);
 	}
 }
 
@@ -518,10 +525,12 @@ static int loox720_power_init(struct device *dev)
 		goto err_bat;
 
 	loox720_power_resources[0].start =
-	gpio_to_irq(GPIO_LOOX720_USB_DETECT_N);
+	gpio_to_irq(GPIO_LOOX720_AC_IN_N);
 	loox720_power_resources[0].end = loox720_power_resources[0].start;
-	loox720_power_resources[1].start = gpio_to_irq(GPIO_LOOX720_AC_IN_N);
+	loox720_power_resources[1].start = gpio_to_irq(GPIO_LOOX720_USB_DETECT_N);
 	loox720_power_resources[1].end = loox720_power_resources[1].start;
+
+	return 0;
 
  err_bat:
 	gpio_free(GPIO_LOOX720_BATTERY_FULL_N);
@@ -687,6 +696,12 @@ static struct max1586_platform_data max1586_info = {
 	.subdevs = max1586_subdevs,
 	.num_subdevs = ARRAY_SIZE(max1586_subdevs),
 	.v3_gain = MAX1586_GAIN_R24_3k32,
+};
+
+static struct i2c_board_info loox720_i2c_board_info[] = {
+	{
+		I2C_BOARD_INFO("wm8750", 0x1a),
+	},
 };
 
 static struct i2c_board_info loox720_pi2c_board_info[] = {
@@ -858,7 +873,7 @@ struct gpio_ress {
 	char *desc;
 };
 
-static int __initdata loox720_gpio_request(struct gpio_ress *gpios, int size)
+static int __init loox720_gpio_request(struct gpio_ress *gpios, int size)
 {
 	int i, rc = 0;
 	int gpio;
@@ -885,10 +900,6 @@ static int __initdata loox720_gpio_request(struct gpio_ress *gpios, int size)
 
 static struct gpio_ress global_gpios[] __initdata = {
 	LOOX720_GPIO_IN(GPIO_LOOX720_USB_DETECT_N, "Loox 720 USB Detection"),
-	LOOX720_GPIO_OUT(LOOX720_EGPIO_LCD2, 0, "Loox 720 LCD"),
-	LOOX720_GPIO_OUT(LOOX720_EGPIO_LCD3, 0, "Loox 720 LCD"),
-	LOOX720_GPIO_OUT(LOOX720_EGPIO_LCD4, 0, "Loox 720 LCD"),
-	LOOX720_GPIO_OUT(LOOX720_EGPIO_LCD1, 0, "Loox 720 LCD"),
 };
 
 static void __init loox720_init(void)
@@ -904,6 +915,7 @@ static void __init loox720_init(void)
 
 	pxa_set_i2c_info(&i2c_pdata);
 	pxa27x_set_i2c_power_info(NULL);
+	i2c_register_board_info(0, ARRAY_AND_SIZE(loox720_i2c_board_info));
 	i2c_register_board_info(1, ARRAY_AND_SIZE(loox720_pi2c_board_info));
 
 	set_pxa_fb_info(&loox720_fb_info);
@@ -918,6 +930,21 @@ static void __init loox720_init(void)
 
 	pxa_set_camera_info(&loox720_pxacamera_platform_data);
 }
+
+static int __init loox720_egpio_init(void)
+{
+	static struct gpio_ress egpio_gpios[] = {
+		LOOX720_GPIO_OUT(LOOX720_EGPIO_LCD1, 0, "Loox 720 LCD"),
+		LOOX720_GPIO_OUT(LOOX720_EGPIO_LCD2, 0, "Loox 720 LCD"),
+		LOOX720_GPIO_OUT(LOOX720_EGPIO_LCD3, 0, "Loox 720 LCD"),
+		LOOX720_GPIO_OUT(LOOX720_EGPIO_LCD4, 0, "Loox 720 LCD"),
+		LOOX720_GPIO_OUT(LOOX720_EGPIO_CAMERA_POWER, 0, "Loox 720 Camera"),
+		LOOX720_GPIO_OUT(LOOX720_EGPIO_CAMERA_RESET, 0, "Loox 720 Camera"),
+		LOOX720_GPIO_OUT(LOOX720_EGPIO_BATTERY, 0, "Loox 720 Battery"),
+	};
+	return loox720_gpio_request(ARRAY_AND_SIZE(egpio_gpios));
+}
+fs_initcall(loox720_egpio_init);
 
 static void __init loox720_fixup(struct machine_desc *desc,
 				struct tag *tags, char **cmdline,
@@ -938,6 +965,7 @@ MACHINE_START(LOOX720, "FSC Loox 720")
 	.map_io = pxa_map_io,
 	.fixup = loox720_fixup,
 	.reserve = loox720_reserve,
+	.nr_irqs = LOOX720_NR_IRQS,
 	.init_irq = pxa27x_init_irq,
 	.timer = &pxa_timer,
 	.init_machine = loox720_init,
