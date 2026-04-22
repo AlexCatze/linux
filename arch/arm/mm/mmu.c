@@ -852,6 +852,13 @@ void __init sanity_check_meminfo(void)
 	}
 #endif
 	meminfo.nr_banks = j;
+
+	/* When PHYS_OFFSET > PAGE_OFFSET, __pa(vmalloc_min) overflows 32 bits.
+	 * In that case all physical RAM is low memory; clear the limit so
+	 * memblock_alloc() uses MEMBLOCK_ALLOC_ANYWHERE (allocate from top). */
+	if (lowmem_limit < PHYS_OFFSET)
+		lowmem_limit = 0;
+
 	memblock_set_current_limit(lowmem_limit);
 }
 
