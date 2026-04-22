@@ -41,8 +41,8 @@
 #include <asm/mach/flash.h>
 
 #include <mach/pxa2xx-regs.h>
-#include <mach/pxa2xx_spi.h>
-#include <plat/ssp.h>
+#include <linux/spi/pxa2xx_spi.h>
+#include <linux/pxa2xx_ssp.h>
 #include <mach/camera.h>
 #include <mach/udc.h>
 #include <mach/audio.h>
@@ -962,7 +962,7 @@ static void __init loox720_reserve(void)
 
 MACHINE_START(LOOX720, "FSC Loox 720")
 	.boot_params = 0xa8000100,
-	.map_io = pxa_map_io,
+	.map_io = pxa27x_map_io,
 	.fixup = loox720_fixup,
 	.reserve = loox720_reserve,
 	.nr_irqs = LOOX720_NR_IRQS,
