@@ -24,6 +24,8 @@
 #ifndef __ASM_ARCH_PXA_GPIO_H
 #define __ASM_ARCH_PXA_GPIO_H
 
+#define ARCH_NR_GPIOS 512
+
 #include <mach/irqs.h>
 #include <mach/hardware.h>
 #include <asm-generic/gpio.h>
