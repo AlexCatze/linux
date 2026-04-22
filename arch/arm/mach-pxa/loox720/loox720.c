@@ -533,7 +533,6 @@ static int loox720_power_init(struct device *dev)
 	return 0;
 
  err_bat:
-	gpio_free(GPIO_LOOX720_BATTERY_FULL_N);
  err_usb_chg:
 	gpio_free(GPIO_LOOX720_USB_CHARGE_N);
  err_ac_in:

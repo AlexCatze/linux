@@ -55,19 +55,19 @@ static struct snd_soc_card snd_soc_loox720;
 static void loox720_ext_control(struct snd_soc_codec *codec)
 {
 	if (loox720_earpiece_func == LOOX_SPK_ON) {
-		snd_soc_dapm_enable_pin(codec, EARPIECE_SPK_NAME);
+		snd_soc_dapm_enable_pin(&codec->dapm, EARPIECE_SPK_NAME);
 	}
 	else {
-		snd_soc_dapm_disable_pin(codec, EARPIECE_SPK_NAME);
+		snd_soc_dapm_disable_pin(&codec->dapm, EARPIECE_SPK_NAME);
 	}
 
 	if (loox720_spk_func == LOOX_SPK_ON) {
-		snd_soc_dapm_enable_pin(codec, SPK_NAME);
+		snd_soc_dapm_enable_pin(&codec->dapm, SPK_NAME);
 	}
 	else {
-		snd_soc_dapm_disable_pin(codec, SPK_NAME);
+		snd_soc_dapm_disable_pin(&codec->dapm, SPK_NAME);
 	}
-	snd_soc_dapm_sync(codec);
+	snd_soc_dapm_sync(&codec->dapm);
 }
 
 static int loox720_startup(struct snd_pcm_substream *substream)
@@ -247,18 +247,18 @@ static int loox720_wm8750_init(struct snd_soc_pcm_runtime *rtd)
 		return err;
 
 	/* Add loox720 specific widgets */
-	err = snd_soc_dapm_new_controls(codec, wm8750_dapm_widgets,
+	err = snd_soc_dapm_new_controls(&codec->dapm, wm8750_dapm_widgets,
 				  ARRAY_SIZE(wm8750_dapm_widgets));
 	if (err)
 		return err;
 
 
 	/* Set up loox720 specific audio paths */
-	err= snd_soc_dapm_add_routes(codec, audio_map, ARRAY_SIZE(audio_map));
+	err = snd_soc_dapm_add_routes(&codec->dapm, audio_map, ARRAY_SIZE(audio_map));
 	if (err)
 		return err;
 
-	err = snd_soc_dapm_sync(codec);
+	err = snd_soc_dapm_sync(&codec->dapm);
 	if (err)
 		return err;
 
@@ -325,6 +325,8 @@ static int __init loox720_init(void)
 	if (!loox720_snd_device)
 		return -ENOMEM;
 
+	snd_soc_loox720.dev = &loox720_snd_device->dev;
+
 	ret = gpio_request(LOOX720_EGPIO_SOUND, "Loox 720 sound");
 	if (ret)
 		goto fail;
@@ -335,7 +337,6 @@ static int __init loox720_init(void)
 
 
 	platform_set_drvdata(loox720_snd_device, &snd_soc_loox720);
-	//loox720_snd_devdata.dev = &loox720_snd_device->dev;
 
 	gpio_direction_output(LOOX720_EGPIO_SOUND, 1);
 	gpio_direction_output(LOOX720_EGPIO_SOUND_AMP, 1);
