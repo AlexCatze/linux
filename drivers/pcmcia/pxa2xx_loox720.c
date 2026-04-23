@@ -15,38 +15,30 @@
 
 #include <asm/mach-types.h>
 
-#include <mach/gpio.h>
+#include <linux/gpio.h>
 #include <mach/loox720.h>
 
 #include "soc_common.h"
 
-static struct pcmcia_irqs loox720_cf_irq = {
-		.sock = 1,
-		.irq = LOOX720_IRQ_CF_DETECT_N,
-		.str = "CF Detect"
-};
-
 static int loox720_pcmcia_hw_init(struct soc_pcmcia_socket *skt)
 {
-switch (skt->nr) {
+	switch (skt->nr) {
 	case 1:
-		skt->socket.pci_irq = LOOX720_IRQ_CF_READY;
-		return soc_pcmcia_request_irqs(skt, &loox720_cf_irq, 1);
+		skt->stat[SOC_STAT_CD].gpio = LOOX720_EGPIO_CF_DETECT_N;
+		skt->stat[SOC_STAT_CD].name = "CF Detect";
+		skt->stat[SOC_STAT_RDY].gpio = LOOX720_EGPIO_CF_READY;
+		skt->stat[SOC_STAT_RDY].name = "CF Ready";
 		break;
 	case 0:
-		skt->socket.pci_irq = LOOX720_IRQ_WIFI_READY;
+		skt->stat[SOC_STAT_RDY].gpio = LOOX720_EGPIO_WIFI_READY;
+		skt->stat[SOC_STAT_RDY].name = "WiFi Ready";
 		break;
 	}
-return 0;
+	return 0;
 }
 
 static void loox720_pcmcia_hw_shutdown(struct soc_pcmcia_socket *skt)
 {
-	switch (skt->nr) {
-	case 1:
-			soc_pcmcia_free_irqs(skt, &loox720_cf_irq, 1);
-	break;
-	}
 }
 
 static void loox720_pcmcia_socket_state(struct soc_pcmcia_socket *skt,
@@ -54,22 +46,16 @@ static void loox720_pcmcia_socket_state(struct soc_pcmcia_socket *skt,
 {
 	switch (skt->nr) {
 	case 1:
-		state->detect = !gpio_get_value(LOOX720_EGPIO_CF_DETECT_N);
-		state->ready = !!gpio_get_value(LOOX720_EGPIO_CF_READY);
-		state->bvd1 = 1;
-		state->bvd2 = 1;
-		state->vs_3v = 1,
-		state->vs_Xv = 1,
-		state->wrprot = 0;
+		state->vs_3v = 1;
+		state->vs_Xv = 1;
 		break;
 	case 0:
+		/* detect/ready handled by stat[] GPIOs; override ready with combined WiFi logic */
 		state->detect = 1;
-		state->ready = gpio_get_value(LOOX720_EGPIO_WIFI_ENABLED) && gpio_get_value(LOOX720_EGPIO_WIFI_READY);
-		state->bvd1 = 1;
-		state->bvd2 = 1;
+		state->ready = gpio_get_value(LOOX720_EGPIO_WIFI_ENABLED) &&
+			       gpio_get_value(LOOX720_EGPIO_WIFI_READY);
 		state->vs_3v = 1;
 		state->vs_Xv = 0;
-		state->wrprot = 0;
 		break;
 	}
 }
@@ -120,7 +106,7 @@ static void loox720_pcmcia_socket_init(struct soc_pcmcia_socket *skt)
 {
 } static void loox720_pcmcia_socket_suspend(struct soc_pcmcia_socket *skt)
 {
-} static struct pcmcia_low_level loox720_pcmcia_ops __initdata = {
+} static struct pcmcia_low_level loox720_pcmcia_ops = {
 		.owner = THIS_MODULE,
 		.nr = 2,
 		.hw_init = loox720_pcmcia_hw_init,
@@ -138,11 +124,8 @@ static int __init request_pcmcia_gpios(void)
 		GPIO_LOOX720_WIFI_POWER0,
 		LOOX720_EGPIO_WIFI_POWER1,
 		GPIO_LOOX720_WIFI_RESET,
-		LOOX720_EGPIO_WIFI_READY,
 		LOOX720_EGPIO_CF_RESET,
-		LOOX720_EGPIO_CF_READY,
 		LOOX720_EGPIO_CF_5V,
-		LOOX720_EGPIO_CF_DETECT_N,
 		LOOX720_EGPIO_CF_3V3,
 	};
 	int ret, i;
@@ -165,11 +148,8 @@ static void __exit free_pcmcia_gpios(void)
 		GPIO_LOOX720_WIFI_POWER0,
 		LOOX720_EGPIO_WIFI_POWER1,
 		GPIO_LOOX720_WIFI_RESET,
-		LOOX720_EGPIO_WIFI_READY,
 		LOOX720_EGPIO_CF_RESET,
-		LOOX720_EGPIO_CF_READY,
 		LOOX720_EGPIO_CF_5V,
-		LOOX720_EGPIO_CF_DETECT_N,
 		LOOX720_EGPIO_CF_3V3,
 	};
 	for (i = 0; i < ARRAY_SIZE(gpios); i++)
