@@ -70,6 +70,8 @@ pxa2xx-obj-$(CONFIG_MACH_BALLOON3)		+= pxa2xx_balloon3.o
 pxa2xx-obj-$(CONFIG_MACH_COLIBRI)		+= pxa2xx_colibri.o
 pxa2xx-obj-$(CONFIG_MACH_COLIBRI320)		+= pxa2xx_colibri.o
 pxa2xx-obj-$(CONFIG_MACH_H4700)			+= pxa2xx_hx4700.o
+pxa2xx-obj-$(CONFIG_MACH_ASUSP525)		+= pxa2xx_asusp525.o
+pxa2xx-obj-$(CONFIG_MACH_LOOX720)		+= pxa2xx_loox720.o
 
 obj-$(CONFIG_PCMCIA_PXA2XX)			+= pxa2xx_base.o $(pxa2xx-obj-y)
 
