@@ -209,7 +209,7 @@ static const struct snd_soc_dapm_widget wm8750_dapm_widgets[] = {
 static struct snd_soc_jack hs_jack;
 
 /* loox720 machine audio_map */
-static const struct snd_soc_dapm_route audio_map[] = {
+static const struct snd_soc_dapm_route loox720_audio_map[] = {
 
 	{HP_NAME, NULL, "LOUT1"},
 	{HP_NAME, NULL, "ROUT1"},
@@ -239,24 +239,6 @@ static int loox720_wm8750_init(struct snd_soc_pcm_runtime *rtd)
 {
 	int err;
 	struct snd_soc_codec *codec = rtd->codec;
-
-	/* Add loox720 specific controls */
-	err = snd_soc_add_controls(codec, wm8750_loox720_controls,
-				ARRAY_SIZE(wm8750_loox720_controls));
-	if (err)
-		return err;
-
-	/* Add loox720 specific widgets */
-	err = snd_soc_dapm_new_controls(&codec->dapm, wm8750_dapm_widgets,
-				  ARRAY_SIZE(wm8750_dapm_widgets));
-	if (err)
-		return err;
-
-
-	/* Set up loox720 specific audio paths */
-	err = snd_soc_dapm_add_routes(&codec->dapm, audio_map, ARRAY_SIZE(audio_map));
-	if (err)
-		return err;
 
 	err = snd_soc_dapm_sync(&codec->dapm);
 	if (err)
@@ -310,6 +292,13 @@ static struct snd_soc_card snd_soc_loox720 = {
 	.num_links = 1,
 	.suspend_post = loox_snd_suspend_post,
 	.resume_pre = loox_snd_resume_pre,
+
+	.controls = wm8750_loox720_controls,
+	.num_controls = ARRAY_SIZE(wm8750_loox720_controls),
+	.dapm_widgets = wm8750_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(wm8750_dapm_widgets),
+	.dapm_routes = loox720_audio_map,
+	.num_dapm_routes = ARRAY_SIZE(loox720_audio_map),
 };
 
 static struct platform_device *loox720_snd_device;
