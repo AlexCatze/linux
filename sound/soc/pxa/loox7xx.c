@@ -181,11 +181,6 @@ static struct snd_soc_jack_pin hs_jack_pins[] = {
 		.pin    = HP_NAME,
 		.mask   = SND_JACK_HEADPHONE,
 	},
-//	{
-//		.pin	= SPK_NAME,
-//		.mask	= SND_JACK_HEADPHONE,
-//		.invert	= 1,
-//	}
 };
 
 /* Headphones jack detection gpios */
@@ -261,13 +256,15 @@ static int loox720_wm8750_init(struct snd_soc_pcm_runtime *rtd)
 	return err;
 }
 
-int loox_snd_suspend_post(struct platform_device *pdev, pm_message_t state) {
+static int loox_snd_suspend_post(struct snd_soc_card *card)
+{
 	gpio_direction_output(LOOX720_EGPIO_SOUND, 0);
 	gpio_direction_output(LOOX720_EGPIO_SOUND_AMP, 0);
 	return 0;
 }
 
-int loox_snd_resume_pre(struct platform_device *pdev) {
+static int loox_snd_resume_pre(struct snd_soc_card *card)
+{
 	gpio_direction_output(LOOX720_EGPIO_SOUND, 1);
 	gpio_direction_output(LOOX720_EGPIO_SOUND_AMP, 1);
 	return 0;
@@ -280,7 +277,7 @@ static struct snd_soc_dai_link loox720_dai = {
 	.cpu_dai_name = "pxa2xx-i2s",
 	.codec_dai_name = "wm8750-hifi",
 	.platform_name = "pxa-pcm-audio",
-	.codec_name = "wm8750-codec.0-001a",
+	.codec_name = "wm8750.0-001a",
 	.init = loox720_wm8750_init,
 	.ops = &loox720_ops,
 };
@@ -301,56 +298,61 @@ static struct snd_soc_card snd_soc_loox720 = {
 	.num_dapm_routes = ARRAY_SIZE(loox720_audio_map),
 };
 
-static struct platform_device *loox720_snd_device;
-
-static int __init loox720_init(void)
+static int __devinit loox720_probe(struct platform_device *pdev)
 {
+	struct snd_soc_card *card = &snd_soc_loox720;
 	int ret;
-
-	if (!(machine_is_loox720()))
-		return -ENODEV;
-
-	loox720_snd_device = platform_device_alloc("soc-audio", -1);
-	if (!loox720_snd_device)
-		return -ENOMEM;
-
-	snd_soc_loox720.dev = &loox720_snd_device->dev;
 
 	ret = gpio_request(LOOX720_EGPIO_SOUND, "Loox 720 sound");
 	if (ret)
-		goto fail;
+		return ret;
 
 	ret = gpio_request(LOOX720_EGPIO_SOUND_AMP, "Loox 720 sound amplifier");
-	if (ret)
-		goto fail;
-
-
-	platform_set_drvdata(loox720_snd_device, &snd_soc_loox720);
+	if (ret) {
+		gpio_free(LOOX720_EGPIO_SOUND);
+		return ret;
+	}
 
 	gpio_direction_output(LOOX720_EGPIO_SOUND, 1);
 	gpio_direction_output(LOOX720_EGPIO_SOUND_AMP, 1);
 
-	ret = platform_device_add(loox720_snd_device);
-	if (!ret)
-		return ret;
+	card->dev = &pdev->dev;
 
-	gpio_direction_output(LOOX720_EGPIO_SOUND, 0);
-	gpio_direction_output(LOOX720_EGPIO_SOUND_AMP, 0);
-
-fail:
-	platform_device_put(loox720_snd_device);
-
+	ret = snd_soc_register_card(card);
+	if (ret) {
+		dev_err(&pdev->dev, "snd_soc_register_card() failed: %d\n", ret);
+		gpio_direction_output(LOOX720_EGPIO_SOUND, 0);
+		gpio_direction_output(LOOX720_EGPIO_SOUND_AMP, 0);
+		gpio_free(LOOX720_EGPIO_SOUND_AMP);
+		gpio_free(LOOX720_EGPIO_SOUND);
+	}
 	return ret;
 }
 
-static void __exit loox720_exit(void)
+static int __devexit loox720_remove(struct platform_device *pdev)
 {
-	platform_device_unregister(loox720_snd_device);
+	struct snd_soc_card *card = platform_get_drvdata(pdev);
+
+	snd_soc_unregister_card(card);
+	gpio_direction_output(LOOX720_EGPIO_SOUND, 0);
+	gpio_direction_output(LOOX720_EGPIO_SOUND_AMP, 0);
+	gpio_free(LOOX720_EGPIO_SOUND_AMP);
+	gpio_free(LOOX720_EGPIO_SOUND);
+	return 0;
 }
 
-module_init(loox720_init);
-module_exit(loox720_exit);
+static struct platform_driver loox720_driver = {
+	.driver = {
+		.name  = "loox720-audio",
+		.owner = THIS_MODULE,
+	},
+	.probe  = loox720_probe,
+	.remove = __devexit_p(loox720_remove),
+};
+
+module_platform_driver(loox720_driver);
 
 MODULE_AUTHOR("Richard Purdie");
 MODULE_DESCRIPTION("ALSA SoC loox720");
 MODULE_LICENSE("GPL");
+MODULE_ALIAS("platform:loox720-audio");

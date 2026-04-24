@@ -24,14 +24,14 @@ static int loox720_pcmcia_hw_init(struct soc_pcmcia_socket *skt)
 {
 	switch (skt->nr) {
 	case 1:
-		skt->stat[SOC_STAT_CD].gpio = LOOX720_EGPIO_CF_DETECT_N;
+		/* EGPIOs are output-only; use IRQ numbers directly to avoid
+		 * gpio_request_one(GPIOF_IN) failing with -EINVAL */
+		skt->stat[SOC_STAT_CD].irq  = LOOX720_IRQ_CF_DETECT_N;
 		skt->stat[SOC_STAT_CD].name = "CF Detect";
-		skt->stat[SOC_STAT_RDY].gpio = LOOX720_EGPIO_CF_READY;
-		skt->stat[SOC_STAT_RDY].name = "CF Ready";
+		skt->socket.pci_irq = LOOX720_IRQ_CF_READY;
 		break;
 	case 0:
-		skt->stat[SOC_STAT_RDY].gpio = LOOX720_EGPIO_WIFI_READY;
-		skt->stat[SOC_STAT_RDY].name = "WiFi Ready";
+		skt->socket.pci_irq = LOOX720_IRQ_WIFI_READY;
 		break;
 	}
 	return 0;
@@ -46,16 +46,23 @@ static void loox720_pcmcia_socket_state(struct soc_pcmcia_socket *skt,
 {
 	switch (skt->nr) {
 	case 1:
-		state->vs_3v = 1;
-		state->vs_Xv = 1;
+		state->detect = !gpio_get_value(LOOX720_EGPIO_CF_DETECT_N);
+		state->ready  = !!gpio_get_value(LOOX720_EGPIO_CF_READY);
+		state->bvd1   = 1;
+		state->bvd2   = 1;
+		state->vs_3v  = 1;
+		state->vs_Xv  = 1;
+		state->wrprot = 0;
 		break;
 	case 0:
-		/* detect/ready handled by stat[] GPIOs; override ready with combined WiFi logic */
 		state->detect = 1;
-		state->ready = gpio_get_value(LOOX720_EGPIO_WIFI_ENABLED) &&
-			       gpio_get_value(LOOX720_EGPIO_WIFI_READY);
-		state->vs_3v = 1;
-		state->vs_Xv = 0;
+		state->ready  = gpio_get_value(LOOX720_EGPIO_WIFI_ENABLED) &&
+				gpio_get_value(LOOX720_EGPIO_WIFI_READY);
+		state->bvd1   = 1;
+		state->bvd2   = 1;
+		state->vs_3v  = 1;
+		state->vs_Xv  = 0;
+		state->wrprot = 0;
 		break;
 	}
 }

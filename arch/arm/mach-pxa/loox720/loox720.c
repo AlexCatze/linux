@@ -842,6 +842,11 @@ static struct platform_device loox720_pm = {
 	.id = -1,
 };
 
+static struct platform_device loox720_audio = {
+	.name = "loox720-audio",
+	.id = -1,
+};
+
 static struct platform_device *devices[] __initdata = {
 //	&loox720_cpld,
 	&loox720_pxa_keys,
@@ -852,6 +857,7 @@ static struct platform_device *devices[] __initdata = {
 	&loox720_backlight,
 	&loox720_i2c_bitbang,
 	&loox720_camera,
+	&loox720_audio,
 //	&loox7xx_flash,
 };
 
