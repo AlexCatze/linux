@@ -625,18 +625,12 @@ struct platform_device loox7xx_flash = {
  ******************************************************************************/
 static const struct ads7846_platform_data ads7846_info = {
 	.model            = 7846,
-	.vref_mv	= 2500,
 	.vref_delay_usecs = 100,
 	.pressure_max     = 1024,
-	.debounce_max     = 12,
-	.debounce_tol     = 4,
+	.debounce_max     = 10,
+	.debounce_tol     = 3,
 	.debounce_rep     = 1,
-	.x_min = 400,
-	.x_max = 3610,
-	.y_min = 3333,
-	.y_max = 3780,
-	.penirq_recheck_delay_usecs = 100,
-	.gpio_pendown	= GPIO_LOOX720_TOUCHPANEL_IRQ_N,
+	.gpio_pendown	  = GPIO_LOOX720_TOUCHPANEL_IRQ_N,
 };
 
 static struct pxa2xx_spi_chip ads7846_chip = {
@@ -650,7 +644,7 @@ static struct spi_board_info spi_board_devices[] = {
 	{
 		.modalias        = "ads7846",
 		.bus_num         = 1,
-		.max_speed_hz    = 200000,
+		.max_speed_hz    = 1000000,
 		.irq             = PXA_GPIO_TO_IRQ(GPIO_LOOX720_TOUCHPANEL_IRQ_N),
 		.platform_data   = &ads7846_info,
 		.controller_data = &ads7846_chip,
