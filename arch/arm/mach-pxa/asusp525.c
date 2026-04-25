@@ -27,6 +27,7 @@
 #include <linux/power_supply.h>
 #include <linux/wm97xx.h>
 #include <linux/regulator/max1586.h>
+#include <linux/memblock.h>
 
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
@@ -35,19 +36,20 @@
 #include <mach/hardware.h>
 #include <mach/pxafb.h>
 #include <mach/mfp-pxa27x.h>
-#include <mach/pxa27x_keypad.h>
+#include <plat/pxa27x_keypad.h>
 #include <mach/pxa2xx-regs.h>
 #include <mach/pxa27x-udc.h>
 #include <mach/mmc.h>
 #include <mach/udc.h>
 #include <mach/audio.h>
 #include <mach/irda.h>
+#include <mach/pxa27x.h>
 
 #include <mach/camera.h>
 #include <media/soc_camera.h>
 
 #include <asm/gpio.h>
-#include <plat/i2c.h>
+#include <linux/i2c/pxa-i2c.h>
 
 #include <mach/asusp525.h>
 #include "generic.h"
@@ -324,7 +326,6 @@ static void udc_power_command(int cmd)
 }
 
 static struct pxa2xx_udc_mach_info asusp525_udc_info __initdata = {
-	.gpio_vbus = GPIO_ASUSP525_USB_CABLE_DETECT,
 	.gpio_pullup = -1,
 	.udc_command = udc_power_command,
 };
@@ -617,7 +618,7 @@ static void __init asusp525_init(void)
 //      pxa27x_set_i2c_power_info(NULL);
 //      i2c_register_board_info(1, ARRAY_AND_SIZE(asusp525_pi2c_board_info));
 
-	set_pxa_fb_info(&asusp525_pxafb_info);
+	pxa_set_fb_info(NULL, &asusp525_pxafb_info);
 
 	pxa_set_udc_info(&asusp525_udc_info);
 
@@ -635,12 +636,17 @@ static void __init asusp525_init(void)
 	platform_add_devices(devices, ARRAY_SIZE(devices));
 }
 
+static void __init asusp525_reserve(void)
+{
+	memblock_reserve(0xa0000000, 0x1000);
+	memblock_reserve(0xa0008000, 0x4000);
+}
+
 MACHINE_START(ASUSP525, "Asus P525")
-	.phys_io	= 0x40000000,
-	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.boot_params	= 0xa0000100,
-	.map_io		= pxa_map_io,
+	.map_io		= pxa27x_map_io,
 	.init_irq	= pxa27x_init_irq,
+	.reserve = asusp525_reserve,
 	.init_machine	= asusp525_init,
 	.timer		= &pxa_timer,
 MACHINE_END
