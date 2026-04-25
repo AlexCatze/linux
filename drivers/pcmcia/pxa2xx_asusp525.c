@@ -15,7 +15,7 @@
 
 #include <asm/mach-types.h>
 
-#include <mach/gpio.h>
+#include <linux/gpio.h>
 #include <mach/asusp525.h>
 
 #include "soc_common.h"
