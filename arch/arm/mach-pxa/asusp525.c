@@ -27,6 +27,7 @@
 #include <linux/power_supply.h>
 #include <linux/wm97xx.h>
 #include <linux/regulator/max1586.h>
+#include <linux/memblock.h>
 
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
@@ -35,7 +36,7 @@
 #include <mach/hardware.h>
 #include <mach/pxafb.h>
 #include <mach/mfp-pxa27x.h>
-#include <mach/pxa27x_keypad.h>
+#include <plat/pxa27x_keypad.h>
 #include <mach/pxa2xx-regs.h>
 #include <mach/pxa27x-udc.h>
 #include <mach/mmc.h>
@@ -635,12 +636,17 @@ static void __init asusp525_init(void)
 	platform_add_devices(devices, ARRAY_SIZE(devices));
 }
 
+static void __init asusp525_reserve(void)
+{
+	memblock_reserve(0xa0000000, 0x1000);
+	memblock_reserve(0xa0008000, 0x4000);
+}
+
 MACHINE_START(ASUSP525, "Asus P525")
-	.phys_io	= 0x40000000,
-	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.boot_params	= 0xa0000100,
-	.map_io		= pxa_map_io,
+	.map_io		= pxa27x_map_io,
 	.init_irq	= pxa27x_init_irq,
+	.reserve = asusp525_reserve,
 	.init_machine	= asusp525_init,
 	.timer		= &pxa_timer,
 MACHINE_END
