@@ -22,7 +22,6 @@
 #include <mach/audio.h>
 
 #include "../codecs/wm9713.h"
-#include "pxa2xx-pcm.h"
 #include "pxa2xx-ac97.h"
 
 static int spk_amplifier_event(struct snd_soc_dapm_widget *widget,
@@ -49,16 +48,24 @@ static const struct snd_soc_dapm_route dapm_routes[] = {
 	{"Rear Speaker", NULL, "HPR"},
 };
 
-static int asusp5x5_ac97_init(struct snd_soc_codec *codec)
+static int asusp5x5_ac97_init(struct snd_soc_pcm_runtime *rtd)
 {
-	snd_soc_dapm_new_controls(codec, wm9713_dapm_widgets, ARRAY_SIZE(wm9713_dapm_widgets));
+	int err;
+	struct snd_soc_codec *codec = rtd->codec;
 
-	snd_soc_dapm_add_routes(codec, dapm_routes, ARRAY_SIZE(dapm_routes));
+	err = snd_soc_dapm_new_controls(&codec->dapm, wm9713_dapm_widgets,
+				  ARRAY_SIZE(wm9713_dapm_widgets));
+	if (err)
+		return err;
 
-	snd_soc_dapm_enable_pin(codec, "Front Speaker");
-	snd_soc_dapm_enable_pin(codec, "Rear Speaker");
-	snd_soc_dapm_enable_pin(codec, "Headset");
-	snd_soc_dapm_sync(codec);
+	err = snd_soc_dapm_add_routes(&codec->dapm, dapm_routes, ARRAY_SIZE(dapm_routes));
+	if (err)
+		return err;
+
+	snd_soc_dapm_enable_pin(&codec->dapm, "Front Speaker");
+	snd_soc_dapm_enable_pin(&codec->dapm, "Rear Speaker");
+	snd_soc_dapm_enable_pin(&codec->dapm, "Headset");
+	snd_soc_dapm_sync(&codec->dapm);
 	return 0;
 }
 
@@ -66,28 +73,26 @@ static struct snd_soc_dai_link asusp5x5_dai[] = {
 	{
 		.name = "AC97",
 		.stream_name = "AC97 HiFi",
-		.cpu_dai = &pxa_ac97_dai[PXA2XX_DAI_AC97_HIFI],
-		.codec_dai = &wm9713_dai[WM9713_DAI_AC97_HIFI],
+		.cpu_dai_name = "pxa2xx-ac97",
+		.codec_dai_name = "wm9713-hifi",
+		.codec_name = "wm9713-codec",
+		.platform_name = "pxa-pcm-audio",
 		.init = asusp5x5_ac97_init,
 	},
 	{
 		.name = "AC97 Aux",
 		.stream_name = "AC97 Aux",
-		.cpu_dai = &pxa_ac97_dai[PXA2XX_DAI_AC97_AUX],
-		.codec_dai = &wm9713_dai[WM9713_DAI_AC97_AUX],
+		.cpu_dai_name = "pxa2xx-ac97-aux",
+		.codec_name = "wm9713-codec",
+		.platform_name = "pxa-pcm-audio",
+		.codec_dai_name = "wm9713-aux",
 	},
 };
 
 static struct snd_soc_card asusp5x5 = {
 	.name = "Asus P525",
-	.platform = &pxa2xx_soc_platform,
 	.dai_link = asusp5x5_dai,
 	.num_links = ARRAY_SIZE(asusp5x5_dai),
-};
-
-static struct snd_soc_device asusp5x5_snd_devdata = {
-	.card = &asusp5x5,
-	.codec_dev = &soc_codec_dev_wm9713,
 };
 
 static struct platform_device *asusp5x5_snd_device;
@@ -106,8 +111,7 @@ static int asusp5x5_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	printk(KERN_INFO "Asus SND: Device Alloc passed\n");
 
-	platform_set_drvdata(asusp5x5_snd_device, &asusp5x5_snd_devdata);
-	asusp5x5_snd_devdata.dev = &asusp5x5_snd_device->dev;
+	platform_set_drvdata(asusp5x5_snd_device, &asusp5x5);
 	
 	ret = platform_device_add(asusp5x5_snd_device);
 	if (!ret)

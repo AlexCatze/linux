@@ -25,6 +25,7 @@
 #include <linux/delay.h>
 #include <linux/platform_device.h>
 #include <linux/input.h>
+#include <linux/gpio-pxa.h>
 
 #include <asm/gpio.h>
 #include <mach/asusp525.h>
@@ -47,7 +48,7 @@ static irqreturn_t asus_joy_isr(int irq, void *dev_id)
 	for (i=0;i<5;i++) state[i]=gpio_get_value(buttons[i]);
 
 
-	if ( (buttons[1]==irq_to_gpio(irq)) || (buttons[2]==irq_to_gpio(irq)) )
+	if ( (buttons[1]==pxa_irq_to_gpio(irq)) || (buttons[2]==pxa_irq_to_gpio(irq)) )
 	{
 		if ((state[1]||state[2])==0)
 		{
@@ -57,7 +58,7 @@ static irqreturn_t asus_joy_isr(int irq, void *dev_id)
 		};
 	}
 
-	if ( (buttons[2]==irq_to_gpio(irq)) || (buttons[3]==irq_to_gpio(irq)) )
+	if ( (buttons[2]==pxa_irq_to_gpio(irq)) || (buttons[3]==pxa_irq_to_gpio(irq)) )
 	{
 		if ((state[2]||state[3])==0)
 		{
@@ -67,7 +68,7 @@ static irqreturn_t asus_joy_isr(int irq, void *dev_id)
 		};
 	}
 
-	if ( (buttons[3]==irq_to_gpio(irq)) || (buttons[4]==irq_to_gpio(irq)) )
+	if ( (buttons[3]==pxa_irq_to_gpio(irq)) || (buttons[4]==pxa_irq_to_gpio(irq)) )
 	{
 		if ((state[3]||state[4])==0)
 		{
@@ -77,7 +78,7 @@ static irqreturn_t asus_joy_isr(int irq, void *dev_id)
 		};
 	}
 
-	if ( (buttons[1]==irq_to_gpio(irq)) || (buttons[4]==irq_to_gpio(irq)) )
+	if ( (buttons[1]==pxa_irq_to_gpio(irq)) || (buttons[4]==pxa_irq_to_gpio(irq)) )
 	{
 		if ((state[1]||state[4])==0)
 		{
@@ -94,7 +95,7 @@ static irqreturn_t asus_joy_isr(int irq, void *dev_id)
 			input_sync(p525_joydev);
 			}
 
-	if (buttons[0]==irq_to_gpio(irq))
+	if (buttons[0]==pxa_irq_to_gpio(irq))
 	{
 		if ((state[1]&&state[2]&&state[3]&&state[4])!=0)
 		{
