@@ -48,7 +48,7 @@
 #include <media/soc_camera.h>
 
 #include <asm/gpio.h>
-#include <plat/i2c.h>
+#include <linux/i2c/pxa-i2c.h>
 
 #include <mach/asusp525.h>
 #include "generic.h"
@@ -325,7 +325,6 @@ static void udc_power_command(int cmd)
 }
 
 static struct pxa2xx_udc_mach_info asusp525_udc_info __initdata = {
-	.gpio_vbus = GPIO_ASUSP525_USB_CABLE_DETECT,
 	.gpio_pullup = -1,
 	.udc_command = udc_power_command,
 };
@@ -618,7 +617,7 @@ static void __init asusp525_init(void)
 //      pxa27x_set_i2c_power_info(NULL);
 //      i2c_register_board_info(1, ARRAY_AND_SIZE(asusp525_pi2c_board_info));
 
-	set_pxa_fb_info(&asusp525_pxafb_info);
+	pxa_set_fb_info(NULL, &asusp525_pxafb_info);
 
 	pxa_set_udc_info(&asusp525_udc_info);
 
