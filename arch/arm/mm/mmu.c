@@ -1016,10 +1016,6 @@ void __init sanity_check_meminfo(void)
 	}
 #endif
 	meminfo.nr_banks = j;
-
-	if (arm_lowmem_limit < PHYS_OFFSET)
-		arm_lowmem_limit = 0;
-
 	high_memory = __va(arm_lowmem_limit - 1) + 1;
 	memblock_set_current_limit(arm_lowmem_limit);
 }
