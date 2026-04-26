@@ -13,7 +13,9 @@
 #include <linux/platform_device.h>
 #include <linux/pda_power.h>
 #include <linux/leds.h>
+#if defined(CONFIG_SWITCH_GPIO) || defined(CONFIG_SWITCH_GPIO_MODULE)
 #include <linux/switch.h>
+#endif
 #include <linux/mfd/core.h>
 #include <linux/mfd/ds1wm.h>
 #include <linux/gpio_keys.h>
@@ -120,7 +122,7 @@ struct platform_device hpipaq214_device_ds1wm = {
 
 static void __init hpipaq214_init_ds1wm(void)
 {
-	clks_register(hpipaq214_clkregs, ARRAY_SIZE(hpipaq214_clkregs));
+	clkdev_add_table(hpipaq214_clkregs, ARRAY_SIZE(hpipaq214_clkregs));
 
 	platform_device_register(&hpipaq214_device_ds1wm);
 }
