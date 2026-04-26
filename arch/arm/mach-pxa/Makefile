@@ -14,6 +14,7 @@ obj-$(CONFIG_PXA3xx)		+= cpufreq-pxa3xx.o
 endif
 
 # Generic drivers that other drivers may depend upon
+obj-y				+= ssp.o # FIXME: temporary hack for ipaq214 lcd driver
 
 # SoC-specific code
 obj-$(CONFIG_PXA25x)		+= mfp-pxa2xx.o pxa2xx.o pxa25x.o
@@ -64,6 +65,15 @@ obj-$(CONFIG_MACH_COLIBRI320)	+= colibri-pxa3xx.o colibri-pxa320.o
 obj-$(CONFIG_MACH_VPAC270)	+= vpac270.o
 
 # End-user Products
+obj-$(CONFIG_MACH_HPIPAQ214)	+= hpipaq214.o hpipaq214-bt.o hpipaq214-mfp.o
+obj-$(CONFIG_MACH_HPIPAQ214)	+= hpipaq214-mmc.o hpipaq214-usb.o
+obj-$(CONFIG_MACH_HPIPAQ214)	+= hpipaq214-lcd.o hpipaq214-wifi.o
+obj-$(CONFIG_MACH_HPIPAQ214)	+= hpipaq214-nand.o hpipaq214-powerkey.o
+ifeq ($(CONFIG_MACH_HPIPAQ214),y)
+ifeq ($(CONFIG_MACH_HPIPAQ214_WIFI),y)
+obj-m	+= hpipaq214-wifi-mod.o
+endif
+endif
 obj-$(CONFIG_MACH_H4700)	+= hx4700.o
 obj-$(CONFIG_MACH_H5000)	+= h5000.o
 obj-$(CONFIG_MACH_HIMALAYA)	+= himalaya.o

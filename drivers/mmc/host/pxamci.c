@@ -132,8 +132,13 @@ static void pxamci_stop_clock(struct pxamci_host *host)
 			udelay(1);
 		} while (timeout--);
 
+#ifndef CONFIG_MACH_HPIPAQ214
+		/* Supress this warning for the iPAQ 21x.
+		 * It goes off continuously and gets annyoing.
+		 * FIXME: Find out why and fix it */
 		if (v & STAT_CLK_EN)
 			dev_err(mmc_dev(host->mmc), "unable to stop clock\n");
+#endif
 	}
 }
 

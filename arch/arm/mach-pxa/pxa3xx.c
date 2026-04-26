@@ -322,12 +322,16 @@ static void pxa3xx_cpu_standby(unsigned int pwrmode)
 	extern const char pm_enter_standby_start[], pm_enter_standby_end[];
 	void (*fn)(unsigned int) = (void __force *)(sram + 0x8000);
 
+#ifdef CONFIG_MACH_HPIPAQ214
+	CKENA |= (1 << CKEN_ISC);	//make sure SRAM clock is on, winCE turns it off
+#endif
+
 	memcpy_toio(sram + 0x8000, pm_enter_standby_start,
 		    pm_enter_standby_end - pm_enter_standby_start);
 
 	AD2D0SR = ~0;
 	AD2D1SR = ~0;
-	AD2D0ER = wakeup_src;
+	AD2D0ER = wakeup_src | ADXER_WEXTWAKE0 | ADXER_WEXTWAKE1;
 	AD2D1ER = 0;
 	ASCR = ASCR;
 	ARSR = ARSR;
@@ -349,19 +353,34 @@ static void pxa3xx_cpu_standby(unsigned int pwrmode)
  */
 static void pxa3xx_cpu_pm_suspend(void)
 {
+#ifdef CONFIG_MACH_HPIPAQ214
+	volatile unsigned long *resumePtr =  phys_to_virt(0xa0000800);
+	volatile unsigned long *resumeDataPtr = phys_to_virt(0xa0000804);
+	unsigned long saved1 = *resumePtr;
+	unsigned long saved2 = *resumeDataPtr;
+
+	unsigned long resumeData[512];	
+	int i;
+#else
 	volatile unsigned long *p = (volatile void *)0xc0000000;
 	unsigned long saved_data = *p;
+#endif
 
 	extern void pxa3xx_cpu_suspend(void);
 	extern void pxa3xx_cpu_resume(void);
 
 	/* resuming from D2 requires the HSIO2/BOOT/TPM clocks enabled */
+#ifdef CONFIG_MACH_HPIPAQ214	
+	//ipaq boot rom deploys into SRAM, and windows switches it off
+	CKENA |= (1 << CKEN_BOOT) | (1 << CKEN_TPM) | (1 << CKEN_ISC);
+#else
 	CKENA |= (1 << CKEN_BOOT) | (1 << CKEN_TPM);
+#endif
 	CKENB |= 1 << (CKEN_HSIO2 & 0x1f);
 
 	/* clear and setup wakeup source */
 	AD3SR = ~0;
-	AD3ER = wakeup_src;
+	AD3ER = wakeup_src | ADXER_WEXTWAKE0 | ADXER_WEXTWAKE1;
 	ASCR = ASCR;
 	ARSR = ARSR;
 
@@ -370,12 +389,44 @@ static void pxa3xx_cpu_pm_suspend(void)
 
 	PSPR = 0x5c014000;
 
+#ifdef CONFIG_MACH_HPIPAQ214
+	//there is a bunch of stuff that is needed by the boot ROM on the ipaq214
+	*resumePtr = virt_to_phys(pxa3xx_cpu_resume);
+	*resumeDataPtr = virt_to_phys(resumeData);
+	//It checks
+	//resumeData[204] = 3; //specifically, but...
+	for(i=0;i<512;i++) //just for luck
+		resumeData[i] = 3;
+#else
 	/* overwrite with the resume address */
 	*p = virt_to_phys(pxa3xx_cpu_resume);
+#endif
 
 	pxa3xx_cpu_suspend();
 
+#ifdef CONFIG_MACH_HPIPAQ214
+	#define setGPIO __REG(0x40e00018)
+	#define clearGPIO __REG(0x40e00024)
+	#define dirGPIO __REG(0x40e0000c)
+	#define mfprGPIO3 __REG(0x40e1027c)
+	#define mfprGPIO3_2 __REG(0x40e102e0)
+	#define STORE1 __REG(0x4090002c)
+	#define STORE2 __REG(0x40900030)
+	
+	STORE1 = 0x0000cd;
+	
+	mfprGPIO3 = 0x0844;
+	__asm ( "nop\n nop\n nop" : : );
+	mfprGPIO3_2 = 0x8C40;
+	__asm ( "nop\n nop\n nop" : : );	
+	dirGPIO |= 0x08;	
+	setGPIO = 0x08;
+	
+	*resumePtr = saved1;
+	*resumeDataPtr = saved2;
+#else
 	*p = saved_data;
+#endif
 
 	AD3ER = 0;
 }
@@ -387,7 +438,7 @@ static void pxa3xx_cpu_pm_enter(suspend_state_t state)
 	 */
 	if (wakeup_src == 0) {
 		printk(KERN_ERR "Not suspending: no wakeup sources\n");
-		return;
+		//return; ipaq214 version commented this
 	}
 
 	switch (state) {
@@ -605,6 +656,7 @@ static struct platform_device *devices[] __initdata = {
 	&pxa3xx_device_ssp4,
 	&pxa27x_device_pwm0,
 	&pxa27x_device_pwm1,
+	&pxa3xx_device_gcu,
 };
 
 static struct sys_device pxa3xx_sysdev[] = {

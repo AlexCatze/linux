@@ -1,3 +1,10 @@
+config MTD_NAND_IDS
+	tristate "Include chip ids for known NAND devices."
+	depends on MTD
+	help
+	  Useful for NAND drivers that do not use the NAND subsystem but
+	  still like to take advantage of the known chip information.
+
 config MTD_NAND_ECC
 	tristate
 
@@ -121,9 +128,6 @@ config MTD_NAND_OMAP_PREFETCH_DMA
 	 The GPMC PREFETCH engine can be configured eigther in MPU interrupt mode
 	 or in DMA interrupt mode.
 	 Say y for DMA mode or MPU mode will be used
-
-config MTD_NAND_IDS
-	tristate
 
 config MTD_NAND_RICOH
 	tristate "Ricoh xD card reader"
@@ -399,6 +403,49 @@ config MTD_NAND_PXA3xx
 	help
 	  This enables the driver for the NAND flash device found on
 	  PXA3xx processors
+
+config MTD_NAND_HPIPAQ214
+	bool "Support for NAND flash on the HP iPAQ 21x"
+	depends on MTD_NAND_PXA3xx && MACH_HPIPAQ214
+	help
+	  This enables the NAND flash platform support on the HP iPAQ 21x.
+
+	  WARNING: You can easily make windows CE inoperable by writing to 
+	  the flash and it might be possible to brick the device altogether!/
+
+	  Answer Y only if you have an HP iPAQ 21x and want to read/write
+	  to the flash.
+
+choice
+	prompt "Partition Layout for the iPAQ 21x "
+	depends on MTD_NAND_HPIPAQ214
+        help
+	  Specifies which parition layout to use for the HP iPAQ 21x.
+
+	config MTD_NAND_HPIPAQ214_LAYOUT_ALL_IN_ONE 
+		bool "All In One Partition"
+		help
+		  Defines a single partition covering the whole chip. 
+		  This is useful for development/debugging.
+		  Be VERY careful when using this.
+
+	config MTD_NAND_HPIPAQ214_LAYOUT_WIN 
+		bool "as Windows CE"
+		help
+		  This sets the layout as windows has it. It is
+		  useful for testing the flash while keeping winCE.
+		  working. For this, just write to /dev/mtdblock6
+		  'iPAQ file store' (IPQ1) area. Windows will
+		  overwrite it when you boot it again.
+
+	config MTD_NAND_HPIPAQ214_LAYOUT_LINUX
+		bool "for Linux"
+		help
+		  This gives a layout useful for having linux as the
+		  only OS on the device. It also gives a small 12MB 
+		  partition for playing around with.
+
+endchoice
 
 config MTD_NAND_PXA3xx_BUILTIN
 	bool "Use builtin definitions for some NAND chips (deprecated)"

@@ -258,6 +258,17 @@ config MACH_VPAC270
 
 comment "End-user Products (sorted by vendor name)"
 
+config MACH_HPIPAQ214
+	bool "HP iPAQ 214"
+	select PXA3xx
+	select CPU_PXA310
+	select PXA_SSP
+	select HAVE_PWM
+
+config MACH_HPIPAQ214_WIFI
+	bool "Include WiFi power control module to trick Android"
+	depends on MACH_HPIPAQ214
+
 config MACH_H4700
 	bool "HP iPAQ hx4700"
 	select PXA27x

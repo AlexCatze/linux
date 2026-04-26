@@ -45,6 +45,7 @@
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/slab.h>
+#include <mach/uart.h>
 
 struct uart_pxa_port {
 	struct uart_port        port;
@@ -54,6 +55,7 @@ struct uart_pxa_port {
 	unsigned int            lsr_break_flag;
 	struct clk		*clk;
 	char			*name;
+	struct pxauart_platform_data	*pdata;
 };
 
 static inline unsigned int serial_in(struct uart_pxa_port *up, int offset)
@@ -342,11 +344,21 @@ static int serial_pxa_startup(struct uart_port *port)
 	struct uart_pxa_port *up = (struct uart_pxa_port *)port;
 	unsigned long flags;
 	int retval;
-
+#ifdef CONFIG_MACH_HPIPAQ214
+	if (port->line == 1) /* Flow control on the FFUART for bluetooth*/
+		up->mcr |= UART_MCR_AFE;
+#else
 	if (port->line == 3) /* HWUART */
 		up->mcr |= UART_MCR_AFE;
 	else
 		up->mcr = 0;
+#endif
+
+	if (up->pdata && up->pdata->open){
+		retval = up->pdata->open(up->port.dev, up->pdata->data);
+		if(retval)
+			return retval;
+	}
 
 	up->port.uartclk = clk_get_rate(up->clk);
 
@@ -354,8 +366,11 @@ static int serial_pxa_startup(struct uart_port *port)
 	 * Allocate the IRQ
 	 */
 	retval = request_irq(up->port.irq, serial_pxa_irq, 0, up->name, up);
-	if (retval)
+	if (retval){
+		if (up->pdata && up->pdata->close) //need to shutdown the whatevers attached if we failed
+			up->pdata->close(up->port.dev, up->pdata->data);
 		return retval;
+	}
 
 	/*
 	 * Clear the FIFO buffers and disable them.
@@ -429,6 +444,9 @@ static void serial_pxa_shutdown(struct uart_port *port)
 				  UART_FCR_CLEAR_RCVR |
 				  UART_FCR_CLEAR_XMIT);
 	serial_out(up, UART_FCR, 0);
+
+	if (up->pdata && up->pdata->close)
+		up->pdata->close(up->port.dev, up->pdata->data);
 }
 
 static void
@@ -794,6 +812,7 @@ static int serial_pxa_probe(struct platform_device *dev)
 	sport->port.dev = &dev->dev;
 	sport->port.flags = UPF_IOREMAP | UPF_BOOT_AUTOCONF;
 	sport->port.uartclk = clk_get_rate(sport->clk);
+	sport->pdata = dev->dev.platform_data;
 
 	switch (dev->id) {
 	case 0: sport->name = "FFUART"; break;

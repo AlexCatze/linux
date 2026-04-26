@@ -70,6 +70,14 @@ config SND_PXA2XX_SOC_TOSA
 	  Say Y if you want to add support for SoC audio on Sharp
 	  Zaurus SL-C6000x models (Tosa).
 
+config SND_PXA3XX_SOC_HPIPAQ214
+	tristate "SoC audio support for HP iPAQ 214"
+	depends on SND_PXA2XX_SOC && MACH_HPIPAQ214
+	select SND_PXA2XX_SOC_AC97
+	select SND_SOC_WM9713
+	help
+	  Say Y if you want to add support for SoC audio on HP iPAQ 214
+
 config SND_PXA2XX_SOC_E740
 	tristate "SoC AC97 Audio support for e740"
 	depends on SND_PXA2XX_SOC && MACH_E740

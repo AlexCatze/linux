@@ -12,6 +12,7 @@
 
 #include <mach/regs-ost.h>
 #include <mach/reset.h>
+#include <mach/pxa3xx-regs.h>
 
 unsigned int reset_status;
 EXPORT_SYMBOL(reset_status);
@@ -91,7 +92,12 @@ void arch_reset(char mode, const char *cmd)
 		cpu_reset(0);
 		break;
 	case 'g':
+#ifdef CONFIG_MACH_HPIPAQ214
+		PMCR = 0xFFFFFFFF; /* Set SWGR bit (bit 31) or PMCR to 1 to perform GPIO Reset. */
+#else
+		#error asd
 		do_gpio_reset();
+#endif
 		break;
 	case 'h':
 	default:

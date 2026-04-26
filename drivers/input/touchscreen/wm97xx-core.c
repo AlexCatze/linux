@@ -431,8 +431,24 @@ static int wm97xx_read_samples(struct wm97xx *wm)
 			"pen down: x=%x:%d, y=%x:%d, pressure=%x:%d\n",
 			data.x >> 12, data.x & 0xfff, data.y >> 12,
 			data.y & 0xfff, data.p >> 12, data.p & 0xfff);
+/*
+ * Removed this hack as I've added the 5-point calibration
+ * method in the Android input system.
+ *
+ * If you need this hack, uncomment the following lines
+ * before compiling.
+ *
+ *   Alvin Wong
+ */
+
+/* #ifdef CONFIG_TOUCHSCREEN_WM97XX_HPIPAQ214
+		// FIXME: rotate ipaq 214's ts, please add calibration program
+		input_report_abs(wm->input_dev, ABS_X, 0xfff - (data.x & 0xfff));
+		input_report_abs(wm->input_dev, ABS_Y, 0xfff - (data.y & 0xfff));
+#else */
 		input_report_abs(wm->input_dev, ABS_X, data.x & 0xfff);
 		input_report_abs(wm->input_dev, ABS_Y, data.y & 0xfff);
+//#endif
 		input_report_abs(wm->input_dev, ABS_PRESSURE, data.p & 0xfff);
 		input_report_key(wm->input_dev, BTN_TOUCH, 1);
 		input_sync(wm->input_dev);
@@ -629,7 +645,7 @@ static int wm97xx_probe(struct device *dev)
 	}
 
 	/* set up touch configuration */
-	wm->input_dev->name = "wm97xx touchscreen";
+	wm->input_dev->name = "wm97xx-touchscreen";
 	wm->input_dev->phys = "wm97xx";
 	wm->input_dev->open = wm97xx_ts_input_open;
 	wm->input_dev->close = wm97xx_ts_input_close;

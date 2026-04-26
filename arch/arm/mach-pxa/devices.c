@@ -173,6 +173,9 @@ struct platform_device pxa_device_ffuart = {
 	.id		= 0,
 	.resource	= pxa_resource_ffuart,
 	.num_resources	= ARRAY_SIZE(pxa_resource_ffuart),
+	.dev		= {
+			.platform_data = NULL,
+	},
 };
 
 void __init pxa_set_ffuart_info(void *info)
@@ -197,6 +200,9 @@ struct platform_device pxa_device_btuart = {
 	.id		= 1,
 	.resource	= pxa_resource_btuart,
 	.num_resources	= ARRAY_SIZE(pxa_resource_btuart),
+	.dev		= {
+			.platform_data = NULL,
+	},
 };
 
 void __init pxa_set_btuart_info(void *info)
@@ -221,11 +227,16 @@ struct platform_device pxa_device_stuart = {
 	.id		= 2,
 	.resource	= pxa_resource_stuart,
 	.num_resources	= ARRAY_SIZE(pxa_resource_stuart),
+	.dev		= {
+			.platform_data = NULL,
+	},
 };
 
 void __init pxa_set_stuart_info(void *info)
 {
+	pxa_device_ffuart.dev.platform_data = info; //ipaq214 v6
 	pxa_register_device(&pxa_device_stuart, info);
+
 }
 
 static struct resource pxa_resource_hwuart[] = {

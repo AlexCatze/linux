@@ -363,7 +363,7 @@ static struct pxa3xx_nand_flash *builtin_flash_types[] = {
 #define tAR_NDTR1(r)	(((r) >> 0) & 0xf)
 
 /* convert nano-seconds to nand flash controller clock cycles */
-#define ns2cycle(ns, clk)	(int)(((ns) * (clk / 1000000) / 1000) - 1)
+#define ns2cycle(ns, clk)	(int)((ns) * (clk / 1000000) / 1000)
 
 /* convert nand flash controller clock cycles to nano-seconds */
 #define cycle2ns(c, clk)	((((c) + 1) * 1000000 + clk / 500) / (clk / 1000))
@@ -761,6 +761,14 @@ static void pxa3xx_nand_cmdfunc(struct mtd_info *mtd, unsigned command,
 	case NAND_CMD_PAGEPROG:
 		info->use_ecc = (info->seqin_column >= mtd->writesize) ? 0 : 1;
 
+#ifdef CONFIG_MACH_HPIPAQ214
+		if(info->seqin_page_addr < 128 || info->seqin_page_addr >= 129280){
+			printk(KERN_ERR "NAND Flash program outside IPQ hard protection: %i (%08x)\n",
+				info->seqin_page_addr, info->seqin_page_addr*2048);
+			break;
+		}
+#endif
+
 		if (prepare_read_prog_cmd(info, cmdset->program,
 				info->seqin_column, info->seqin_page_addr))
 			break;
@@ -768,6 +776,13 @@ static void pxa3xx_nand_cmdfunc(struct mtd_info *mtd, unsigned command,
 		pxa3xx_nand_do_cmd(info, NDSR_WRDREQ);
 		break;
 	case NAND_CMD_ERASE1:
+#ifdef CONFIG_MACH_HPIPAQ214
+		if(page_addr < 128 || page_addr >= 129280){
+			printk(KERN_ERR "NAND Flash erase outside IPQ hard protection: %i (%08x)\n",
+				page_addr, page_addr*2048);
+			break;
+		}
+#endif
 		if (prepare_erase_cmd(info, cmdset->erase, page_addr))
 			break;
 
@@ -1214,6 +1229,11 @@ static int pxa3xx_nand_probe(struct platform_device *pdev)
 	struct mtd_info *mtd;
 	struct resource *r;
 	int ret = 0, irq;
+#ifdef CONFIG_MTD_CMDLINE_PARTS
+	int n_cmdline_parts = 0;
+	struct mtd_partition *cmdline_parts = NULL;
+	const char *part_probes[] = { "cmdlinepart", NULL };
+#endif
 
 	pdata = pdev->dev.platform_data;
 
@@ -1236,7 +1256,7 @@ static int pxa3xx_nand_probe(struct platform_device *pdev)
 	mtd->priv = info;
 	mtd->owner = THIS_MODULE;
 
-	info->clk = clk_get(&pdev->dev, NULL);
+	info->clk = clk_get(&pdev->dev, "NANDCLK");
 	if (IS_ERR(info->clk)) {
 		dev_err(&pdev->dev, "failed to get nand clock\n");
 		ret = PTR_ERR(info->clk);
