@@ -340,7 +340,8 @@ static int __init egpio_probe(struct platform_device *pdev)
 	ei->nirqs = pdata->num_irqs;
 	ei->ack_register = pdata->ack_register;
 	ei->irq_register = pdata->irq_register;
-	egpio_writew(0x3ff, ei, ei->irq_register);
+	if (ei->irq_register)
+		egpio_writew(0x3ff, ei, ei->irq_register);
 
 	if (ei->chained_irq) {
 		/* Setup irq handlers */
