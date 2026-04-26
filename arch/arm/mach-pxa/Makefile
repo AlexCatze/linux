@@ -97,5 +97,9 @@ obj-$(CONFIG_MACH_RAUMFELD_RC)		+= raumfeld.o
 obj-$(CONFIG_MACH_RAUMFELD_CONNECTOR)	+= raumfeld.o
 obj-$(CONFIG_MACH_RAUMFELD_SPEAKER)	+= raumfeld.o
 obj-$(CONFIG_MACH_ZIPIT2)	+= z2.o
+obj-$(CONFIG_MACH_ASUSP525)    += asusp525.o asusp525_joy.o asusp525_kbd.o
+obj-$(CONFIG_MACH_LOOX720)	+= loox720/
+
 
 obj-$(CONFIG_TOSA_BT)		+= tosa-bt.o
+obj-$(CONFIG_ASUSP525_RFKILL)	+= asusp525_rfkill.o

@@ -24,6 +24,10 @@
 #ifndef __ASM_ARCH_PXA_GPIO_H
 #define __ASM_ARCH_PXA_GPIO_H
 
+/* PXA boards use off-chip GPIO expanders (EGPIO) beyond NR_BUILTIN_GPIO=192.
+ * Loox 720 needs 9 banks of 16 EGPIOs: 192 + 144 = 336. Use 512 for headroom. */
+#define ARCH_NR_GPIOS	512
+
 #include <asm-generic/gpio.h>
 
 #include <mach/irqs.h>
