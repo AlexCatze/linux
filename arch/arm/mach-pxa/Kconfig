@@ -548,6 +548,18 @@ config MACH_E800
 	  Say Y here if you intend to run this kernel on a Toshiba
 	  e800 family PDA.
 
+config MACH_G900
+	bool "Toshiba Portege G900"
+	depends on ARCH_PXA
+	select PXA27x
+	select IWMMXT
+	select HAVE_PWM
+	select GPIO_SYSFS
+	help
+	  Say Y here if you intend to run this kernel on a
+	  Toshiba G900. Currently there is only basic support
+	  for this phone/PDA.  select PXA_HAVE_BOARD_IRQS
+
 endmenu
 
 config PXA25x

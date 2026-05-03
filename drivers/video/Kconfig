@@ -1818,6 +1818,18 @@ config FB_PXA_PARAMETERS
 
 	  <file:Documentation/fb/pxafb.txt> describes the available parameters.
 
+config FB_G900
+	tristate "Toshiba frame buffer support"
+	depends on FB && ARM
+	select FB_CFB_FILLRECT
+	select FB_CFB_COPYAREA
+	select FB_CFB_IMAGEBLIT
+	---help---
+	  Say Y here if you have a Toshiba G900 PDA.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called g900fb.
+
 config FB_MBX
 	tristate "2700G LCD framebuffer support"
 	depends on FB && ARCH_PXA

@@ -89,6 +89,7 @@ obj-$(CONFIG_MACH_E740)		+= e740.o
 obj-$(CONFIG_MACH_E750)		+= e750.o
 obj-$(CONFIG_MACH_E400)		+= e400.o
 obj-$(CONFIG_MACH_E800)		+= e800.o
+obj-$(CONFIG_MACH_G900)		+= g900.o
 
 # Support for blinky lights
 led-y := leds.o
